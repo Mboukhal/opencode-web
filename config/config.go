@@ -58,7 +58,7 @@ func Load() (*Config, error) {
 		DBPath:             env("DB_PATH", dataDir+"/app/app.db"),
 		SSHKeyPath:         env("SSH_KEY_PATH", dataDir+"/ssh/id_ed25519"),
 		OpenCodeBin:        env("OPENCODE_BIN", "/usr/local/bin/opencode"),
-		OpenCodeModel:      env("OPENCODE_MODEL", "opencode/big-pickle"),
+		OpenCodeModel:      env("OPENCODE_MODEL", "opencode/muse-spark-1.3"),
 		OpenCodeAgent:      env("OPENCODE_AGENT", ""),
 		OpenCodeTimeout:    envDuration("OPENCODE_TIMEOUT", 30*time.Minute),
 		GitHubAllowedOrg:   splitList(os.Getenv("GITHUB_ORGS")),

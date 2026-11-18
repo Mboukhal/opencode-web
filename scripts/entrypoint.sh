@@ -53,7 +53,7 @@ if [ ! -f "$CONFIG/opencode.json" ]; then
   cat > "$CONFIG/opencode.json" <<JSON
 {
   "\$schema": "https://opencode.ai/config.json",
-  "model": "${OPENCODE_MODEL:-opencode/big-pickle}",
+  "model": "${OPENCODE_MODEL:-opencode/muse-spark-1.3}",
   "experimental": { "subagent_depth": 2 }
 }
 JSON

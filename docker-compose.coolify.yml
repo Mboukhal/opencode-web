@@ -20,7 +20,7 @@ services:
       DB_PATH: /data/app/app.db
       SSH_KEY_PATH: /data/ssh/id_ed25519
       OPENCODE_BIN: ${OPENCODE_BIN:-/data/install/opencode}
-      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/big-pickle}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/muse-spark-1.3}
       OPENCODE_TIMEOUT: ${OPENCODE_TIMEOUT:-30m}
       GITHUB_ORGS: ${GITHUB_ORGS:-login:Mboukhal}
     volumes:
