@@ -1,0 +1,31 @@
+{{define "layout"}}<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c0c0e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>{{.Title}} · opencode</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="{{if .User}}/projects{{else}}/{{end}}">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">opencode</span>
+  </a>
+  {{if .User}}
+  <form method="post" action="/logout" class="topbar-right">
+    <span class="who" title="{{.User.Email}}">{{shortEmail .User.Email}}</span>
+    <button class="btn btn-ghost btn-sm" type="submit">Sign out</button>
+  </form>
+  {{end}}
+</header>
+<main class="shell">
+{{template "content" .}}
+</main>
+<script src="/static/app.js" defer></script>
+</body>
+</html>{{end}}

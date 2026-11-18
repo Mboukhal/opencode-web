@@ -1,0 +1,68 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/projects">Projects</a><span>/</span><span>{{.Data.Project.Repo}}</span></nav>
+
+<div class="page-head">
+  <div>
+    <h1>{{.Data.Project.Repo}}</h1>
+    <p class="sub mono">{{.Data.Project.Path}}</p>
+  </div>
+  <div class="head-actions">
+    <span class="pill pill-{{.Data.Status}}">{{if .Data.Busy}}working{{else}}{{.Data.Status}}{{end}}</span>
+  </div>
+</div>
+
+{{if .Data.Busy}}
+<p class="alert alert-info">A git operation is running. This page refreshes on its own.</p>
+<meta http-equiv="refresh" content="5">
+{{end}}
+{{if .Data.Detail}}<p class="alert alert-warn">{{.Data.Detail}}</p>{{end}}
+
+<section class="panel run-panel">
+  <form method="post" action="/run" class="run-form">
+    <input type="hidden" name="owner" value="{{.Data.Project.Owner}}">
+    <input type="hidden" name="repo" value="{{.Data.Project.Repo}}">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" name="prompt" rows="4" required
+      placeholder="Describe the task. OpenCode runs with tools enabled in this repository."></textarea>
+    <button class="btn btn-primary btn-block" type="submit">Start session</button>
+  </form>
+</section>
+
+{{if .Data.Sessions}}
+<section class="panel">
+  <h2 class="panel-title">Recent sessions</h2>
+  <ul class="session-list">
+    {{range .Data.Sessions}}
+    <li>
+      <span class="session-title">{{.Title}}</span>
+      <span class="session-meta mono">{{ago .Updated}}</span>
+    </li>
+    {{end}}
+  </ul>
+</section>
+{{end}}
+
+<section class="panel">
+  <h2 class="panel-title">OpenCode role</h2>
+  <p class="panel-hint">Written to <code>.opencode/opencode.json</code> in this repository and applied to every session started here.</p>
+  <form method="post" action="/projects/config" class="stack">
+    <input type="hidden" name="owner" value="{{.Data.Project.Owner}}">
+    <input type="hidden" name="repo" value="{{.Data.Project.Repo}}">
+    <label>Model <input name="model" value="{{.Data.Project.Model}}" placeholder="opencode/big-pickle" class="mono"></label>
+    <label>Agent id <input name="agent" value="{{.Data.Project.Agent}}" placeholder="project" class="mono"></label>
+    <label>Role / system prompt
+      <textarea name="role" rows="4" placeholder="You are a senior Go engineer for this repository. Prefer small, tested changes.">{{.Data.Project.Role}}</textarea>
+    </label>
+    <button class="btn btn-secondary" type="submit">Save role</button>
+  </form>
+</section>
+
+<section class="panel danger">
+  <h2 class="panel-title">Danger zone</h2>
+  <form method="post" action="/projects/remove" onsubmit="return confirm('Delete the local clone? Commits not pushed are lost.')">
+    <input type="hidden" name="owner" value="{{.Data.Project.Owner}}">
+    <input type="hidden" name="repo" value="{{.Data.Project.Repo}}">
+    <button class="btn btn-danger" type="submit">Remove local clone</button>
+  </form>
+</section>
+{{end}}

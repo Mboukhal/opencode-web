@@ -1,0 +1,69 @@
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1>Projects</h1>
+    <p class="sub">
+      {{len .Data.Repos}} repositories from github.com/{{index .Data.Logins 0}}
+      {{if not .Data.LastSynced.IsZero}} · synced {{since .Data.LastSynced}}{{end}}
+    </p>
+  </div>
+  <form method="post" action="/projects/sync">
+    <button class="btn btn-secondary" type="submit">Sync GitHub</button>
+  </form>
+</div>
+
+{{if .Error}}<p class="alert alert-error">{{.Error}}</p>{{end}}
+
+{{if not .Data.Repos}}
+  <div class="empty">
+    <p class="empty-title">No repositories yet</p>
+    <p>Sync your GitHub account to list repositories, or clone a private one by name below.</p>
+  </div>
+{{end}}
+
+<ul class="repo-list">
+  {{range .Data.Repos}}
+  <li class="repo state-{{.Status}}">
+    <div class="repo-main">
+      {{if .Loaded}}
+        <a class="repo-name" href="/projects/{{.Owner}}/{{.Repo}}">{{.Repo}}</a>
+      {{else}}
+        <span class="repo-name repo-name-idle">{{.Repo}}</span>
+      {{end}}
+      <p class="repo-meta">
+        <span class="pill pill-{{.Status}}">{{.StateLabel}}</span>
+        {{if .Private}}<span class="tag">private</span>{{end}}
+        {{if .Language}}<span class="tag">{{.Language}}</span>{{end}}
+        {{if .Detail}}<span class="tag">{{.Detail}}</span>{{end}}
+      </p>
+      {{if .Description}}<p class="repo-desc">{{.Description}}</p>{{end}}
+    </div>
+    <div class="repo-actions">
+      {{if .Loaded}}
+        {{if eq .StateLabel "update available"}}
+          <form method="post" action="/projects/pull">
+            <input type="hidden" name="owner" value="{{.Owner}}"><input type="hidden" name="repo" value="{{.Repo}}">
+            <button class="btn btn-primary btn-sm" type="submit">Pull</button>
+          </form>
+        {{end}}
+        <a class="btn btn-secondary btn-sm" href="/projects/{{.Owner}}/{{.Repo}}">Open</a>
+      {{else}}
+        <form method="post" action="/projects/clone">
+          <input type="hidden" name="owner" value="{{.Owner}}"><input type="hidden" name="repo" value="{{.Repo}}">
+          <button class="btn btn-primary btn-sm" type="submit">Clone</button>
+        </form>
+      {{end}}
+    </div>
+  </li>
+  {{end}}
+</ul>
+
+<details class="manual">
+  <summary>Clone a private repository by name</summary>
+  <form method="post" action="/projects/clone" class="manual-form">
+    <label>Owner <input name="owner" value="Mboukhal" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*"></label>
+    <label>Repository <input name="repo" placeholder="repo-name" required pattern="[A-Za-z0-9][A-Za-z0-9._-]*"></label>
+    <button class="btn btn-primary" type="submit">Clone with deploy key</button>
+  </form>
+</details>
+{{end}}

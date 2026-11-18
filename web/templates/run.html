@@ -1,0 +1,19 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/projects">Projects</a><span>/</span><a href="/projects/{{.Data.Owner}}/{{.Data.Repo}}">{{.Data.Repo}}</a></nav>
+
+<div class="page-head">
+  <div>
+    <h1>Session</h1>
+    <p class="sub">Started {{since .Data.StartedAt}}</p>
+  </div>
+  <span class="pill pill-running" id="status">running</span>
+</div>
+
+<p class="prompt-echo">{{.Data.Prompt}}</p>
+
+<div class="stream" id="stream" data-run="{{.Data.ID}}">
+  <div class="stream-empty" id="stream-empty">Waiting for the first token…</div>
+</div>
+
+<a class="btn btn-secondary btn-block" href="/projects/{{.Data.Owner}}/{{.Data.Repo}}">Back to project</a>
+{{end}}

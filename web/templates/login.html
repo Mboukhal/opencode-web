@@ -1,0 +1,21 @@
+{{define "content"}}
+<section class="login-hero">
+  <div class="login-copy">
+    <p class="kicker">self-hosted</p>
+    <h1>Your code, from<br>anywhere.</h1>
+    <p class="lede">Pick a repository and start an OpenCode session on the server. Same skills, same models, no laptop left open.</p>
+    <a class="btn btn-primary" href="/auth/google">Continue with Google</a>
+    <p class="fineprint">Access is limited to {{.SeedEmail}}</p>
+  </div>
+  <aside class="login-aside" aria-hidden="true">
+    <div class="term">
+      <div class="term-bar"><span></span><span></span><span></span></div>
+      <pre class="term-body"><span class="t-dim">~/projects/mt-logic</span>
+<span class="t-accent">$</span> opencode run "fix the bridge timeout"
+<span class="t-dim">→ reading bridge/main.go</span>
+<span class="t-dim">→ editing 3 files</span>
+<span class="t-ok">✓ done in 41s</span></pre>
+    </div>
+  </aside>
+</section>
+{{end}}

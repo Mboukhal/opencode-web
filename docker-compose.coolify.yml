@@ -1,0 +1,64 @@
+services:
+  opencode-web:
+    build:
+      context: .
+      args:
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-2.3.2}
+    image: opencode-web:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    # The app serves through the Coolify proxy on the shared network.
+    environment:
+      ADDR: ":8080"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to the public https origin}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-lios80466@gmail.com}
+      DATA_DIR: /data
+      PROJECTS_DIR: /data/projects
+      OPENCODE_CONFIG_DIR: /data/config
+      OPENCODE_STATE_DIR: /data/state
+      DB_PATH: /data/app/app.db
+      SSH_KEY_PATH: /data/ssh/id_ed25519
+      OPENCODE_BIN: ${OPENCODE_BIN:-/data/install/opencode}
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-opencode/big-pickle}
+      OPENCODE_TIMEOUT: ${OPENCODE_TIMEOUT:-30m}
+      GITHUB_ORGS: ${GITHUB_ORGS:-login:Mboukhal}
+    volumes:
+      - /data/opencode/projects:/data/projects
+      - /data/opencode/config:/data/config
+      - /data/opencode/state:/data/state
+      - /data/opencode/install:/data/install
+      - /data/opencode/ssh:/data/ssh:ro
+      - /data/opencode/app:/data/app
+      - /data/opencode/home:/data/home
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      - coolify.managed=true
+      - coolify.applicationId=${COOLIFY_APP_ID:-}
+      - coolify.type=application
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.http-0-${COOLIFY_APP_UUID:-opencode}.entryPoints=http
+      - traefik.http.routers.http-0-${COOLIFY_APP_UUID:-opencode}.middlewares=redirect-to-https
+      - traefik.http.routers.http-0-${COOLIFY_APP_UUID:-opencode}.rule=Host(`${COOLIFY_FQDN:-code.mboukhal.dev}`)
+      - traefik.http.routers.http-0-${COOLIFY_APP_UUID:-opencode}.service=http-0-${COOLIFY_APP_UUID:-opencode}
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.entryPoints=https
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.middlewares=gzip
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.rule=Host(`${COOLIFY_FQDN:-code.mboukhal.dev}`)
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.service=https-0-${COOLIFY_APP_UUID:-opencode}
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.tls=true
+      - traefik.http.routers.https-0-${COOLIFY_APP_UUID:-opencode}.tls.certresolver=letsencrypt
+      - traefik.http.services.https-0-${COOLIFY_APP_UUID:-opencode}.loadbalancer.server.port=8080
+    networks:
+      - coolify
+
+networks:
+  coolify:
+    external: true
