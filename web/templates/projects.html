@@ -3,7 +3,7 @@
   <div>
     <h1>Projects</h1>
     <p class="sub">
-      {{len .Data.Repos}} repositories from github.com/{{index .Data.Logins 0}}
+      <span id="repo-count">{{len .Data.Repos}}</span> repositories from github.com/{{index .Data.Logins 0}}
       {{if not .Data.LastSynced.IsZero}} · synced {{since .Data.LastSynced}}{{end}}
     </p>
   </div>
@@ -14,6 +14,21 @@
 
 {{if .Error}}<p class="alert alert-error">{{.Error}}</p>{{end}}
 
+<div class="toolbar">
+  <div class="search">
+    <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+    <input id="q" type="search" placeholder="Search repositories" autocomplete="off" aria-label="Search repositories">
+    <button id="q-clear" class="search-clear" type="button" aria-label="Clear search" hidden>×</button>
+  </div>
+  <div class="filters" role="group" aria-label="Filter repositories">
+    <button class="chip is-active" data-filter="all" type="button">All</button>
+    <button class="chip" data-filter="loaded" type="button">Loaded</button>
+    <button class="chip" data-filter="update" type="button">Updates</button>
+    <button class="chip" data-filter="not_loaded" type="button">Not loaded</button>
+    <button class="chip" data-filter="error" type="button">Issues</button>
+  </div>
+</div>
+
 {{if not .Data.Repos}}
   <div class="empty">
     <p class="empty-title">No repositories yet</p>
@@ -21,9 +36,16 @@
   </div>
 {{end}}
 
-<ul class="repo-list">
+<ul class="repo-list" id="repo-list">
   {{range .Data.Repos}}
-  <li class="repo state-{{.Status}}">
+  <li class="repo state-{{.Status}}"
+      data-name="{{.Repo}}"
+      data-owner="{{.Owner}}"
+      data-desc="{{.Description}}"
+      data-lang="{{.Language}}"
+      data-status="{{.Status}}"
+      data-loaded="{{if .Loaded}}1{{else}}0{{end}}"
+      data-job="{{.JobID}}">
     <div class="repo-main">
       {{if .Loaded}}
         <a class="repo-name" href="/projects/{{.Owner}}/{{.Repo}}">{{.Repo}}</a>
@@ -41,22 +63,20 @@
     <div class="repo-actions">
       {{if .Loaded}}
         {{if eq .StateLabel "update available"}}
-          <form method="post" action="/projects/pull">
-            <input type="hidden" name="owner" value="{{.Owner}}"><input type="hidden" name="repo" value="{{.Repo}}">
-            <button class="btn btn-primary btn-sm" type="submit">Pull</button>
-          </form>
+          <button class="btn btn-primary btn-sm js-pull" type="button"
+                  data-owner="{{.Owner}}" data-repo="{{.Repo}}">Pull</button>
         {{end}}
         <a class="btn btn-secondary btn-sm" href="/projects/{{.Owner}}/{{.Repo}}">Open</a>
       {{else}}
-        <form method="post" action="/projects/clone">
-          <input type="hidden" name="owner" value="{{.Owner}}"><input type="hidden" name="repo" value="{{.Repo}}">
-          <button class="btn btn-primary btn-sm" type="submit">Clone</button>
-        </form>
+        <button class="btn btn-primary btn-sm js-clone" type="button"
+                data-owner="{{.Owner}}" data-repo="{{.Repo}}">Clone</button>
       {{end}}
     </div>
   </li>
   {{end}}
 </ul>
+
+<p class="no-results" id="no-results" hidden>No repositories match that search.</p>
 
 <details class="manual">
   <summary>Clone a private repository by name</summary>
@@ -66,4 +86,38 @@
     <button class="btn btn-primary" type="submit">Clone with deploy key</button>
   </form>
 </details>
+
+<dialog id="clone-dialog" class="dialog" aria-labelledby="clone-title">
+  <form method="dialog" class="dialog-head">
+    <div>
+      <h2 id="clone-title">Clone repository</h2>
+      <p class="dialog-sub mono" id="clone-target">owner/repo</p>
+    </div>
+    <button class="dialog-close" value="cancel" aria-label="Close">×</button>
+  </form>
+
+  <div class="dialog-body">
+    <div id="clone-form">
+      <label>Model <input id="clone-model" name="model" class="mono" placeholder="opencode/muse-spark-1.3"></label>
+      <label>Role / system prompt
+        <textarea id="clone-role" name="role" rows="3" placeholder="Optional. Written to .opencode/agents/project.md"></textarea>
+      </label>
+      <p class="dialog-hint">Clones with the deploy key into <code>/data/projects</code>.</p>
+    </div>
+
+    <div id="clone-progress" hidden>
+      <div class="progress-head">
+        <span class="pill pill-running" id="clone-state">cloning</span>
+        <span class="mono" id="clone-elapsed">0s</span>
+      </div>
+      <pre class="log" id="clone-log" aria-live="polite"></pre>
+    </div>
+  </div>
+
+  <div class="dialog-foot">
+    <button class="btn btn-secondary" id="clone-cancel" type="button">Cancel</button>
+    <button class="btn btn-primary" id="clone-start" type="button">Start clone</button>
+    <a class="btn btn-primary" id="clone-open" href="#" hidden>Open project</a>
+  </div>
+</dialog>
 {{end}}

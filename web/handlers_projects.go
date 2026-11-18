@@ -42,6 +42,7 @@ type repoView struct {
 	Status      projects.Status
 	Detail      string
 	Busy        bool
+	JobID       string
 }
 
 // Label is the human-readable state shown in the list.
@@ -129,6 +130,10 @@ func (s *Server) buildRepoViews(ctx context.Context) ([]repoView, error) {
 			v.Status, v.Detail = s.projects.Status(ctx, p.Owner, p.Repo)
 			v.Busy = s.projects.IsBusy(p.Owner, p.Repo)
 		}
+		if j := s.jobs.ActiveFor(c.Owner, c.Repo); j != nil {
+			v.JobID = j.ID
+			v.Busy = true
+		}
 		views = append(views, v)
 	}
 
@@ -141,6 +146,10 @@ func (s *Server) buildRepoViews(ctx context.Context) ([]repoView, error) {
 		v := repoView{Owner: p.Owner, Repo: p.Repo, Loaded: true, Private: true}
 		v.Status, v.Detail = s.projects.Status(ctx, p.Owner, p.Repo)
 		v.Busy = s.projects.IsBusy(p.Owner, p.Repo)
+		if j := s.jobs.ActiveFor(p.Owner, p.Repo); j != nil {
+			v.JobID = j.ID
+			v.Busy = true
+		}
 		views = append(views, v)
 	}
 	return views, nil

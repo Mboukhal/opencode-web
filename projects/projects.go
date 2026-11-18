@@ -4,6 +4,7 @@
 package projects
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -81,7 +82,7 @@ func (m *Manager) release(owner, repo string) {
 }
 
 // Clone clones owner/repo into the projects directory and registers it.
-func (m *Manager) Clone(ctx context.Context, owner, repo, model, agent, role string) error {
+func (m *Manager) Clone(ctx context.Context, owner, repo, model, agent, role string, progress func(string)) error {
 	if !m.claim(owner, repo) {
 		return fmt.Errorf("an operation is already running for %s/%s", owner, repo)
 	}
@@ -99,20 +100,23 @@ func (m *Manager) Clone(ctx context.Context, owner, repo, model, agent, role str
 	defer cancel()
 
 	remote := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
-	if _, err := m.git(ctx, m.root, "clone", "--recurse-submodules", remote, dir); err != nil {
+	progress("cloning " + remote)
+	if _, err := m.gitStream(ctx, m.root, progress, "clone", "--progress", "--recurse-submodules", remote, dir); err != nil {
 		return err
 	}
+	progress("clone complete")
 
 	if _, err := m.store.AddProject(ctx, store.Project{
 		Owner: owner, Repo: repo, Path: dir, Model: model, Agent: agent, Role: role,
 	}); err != nil {
 		return err
 	}
+	progress("writing opencode config")
 	return m.WriteConfig(ctx, owner, repo, model, agent, role)
 }
 
 // Pull fetches and fast-forwards the clone. It refuses to touch a dirty tree.
-func (m *Manager) Pull(ctx context.Context, owner, repo string) error {
+func (m *Manager) Pull(ctx context.Context, owner, repo string, progress func(string)) error {
 	if !m.claim(owner, repo) {
 		return fmt.Errorf("an operation is already running for %s/%s", owner, repo)
 	}
@@ -127,9 +131,11 @@ func (m *Manager) Pull(ctx context.Context, owner, repo string) error {
 	} else if strings.TrimSpace(out) != "" {
 		return fmt.Errorf("working tree has uncommitted changes; commit or stash before pulling")
 	}
-	if _, err := m.git(ctx, dir, "pull", "--ff-only", "--recurse-submodules"); err != nil {
+	progress("pulling from origin")
+	if _, err := m.gitStream(ctx, dir, progress, "pull", "--ff-only", "--progress", "--recurse-submodules"); err != nil {
 		return err
 	}
+	progress("up to date")
 	return m.store.MarkPulled(ctx, owner, repo)
 }
 
@@ -250,6 +256,49 @@ func (m *Manager) Remove(ctx context.Context, owner, repo string) error {
 		return fmt.Errorf("removing clone: %w", err)
 	}
 	return m.store.DeleteProject(ctx, owner, repo)
+}
+
+// gitStream runs git and forwards stderr progress lines to progress.
+func (m *Manager) gitStream(ctx context.Context, dir string, progress func(string), args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), m.gitEn...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	pipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("git %s: %w", args[0], err)
+	}
+	var last string
+	sc := bufio.NewScanner(pipe)
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := cleanGitLine(sc.Text())
+		if line == "" || line == last {
+			continue
+		}
+		last = line
+		progress(line)
+	}
+	if err := cmd.Wait(); err != nil {
+		return out.String(), fmt.Errorf("git %s: %s", args[0], last)
+	}
+	return out.String(), nil
+}
+
+// cleanGitLine strips carriage-return progress redraws and noise.
+func cleanGitLine(s string) string {
+	if i := strings.LastIndexByte(s, '\r'); i >= 0 {
+		s = s[i+1:]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" || strings.HasPrefix(s, "remote: Counting") || strings.HasPrefix(s, "Receiving objects: 100%") {
+		return s
+	}
+	return s
 }
 
 func (m *Manager) git(ctx context.Context, dir string, args ...string) (string, error) {

@@ -22,6 +22,9 @@
 
 * { box-sizing: border-box; }
 
+/* The hidden attribute must beat component display rules (btn, pill, ...). */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   background: var(--bg);
@@ -237,4 +240,102 @@ textarea { resize: vertical; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+}
+
+/* --- toolbar: search + filters --- */
+.toolbar {
+  display: grid; gap: 10px; margin: 0 0 6px;
+  position: sticky; top: 56px; z-index: 10;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.search { position: relative; display: flex; align-items: center; }
+.search-icon {
+  position: absolute; left: 12px; width: 15px; height: 15px;
+  fill: none; stroke: var(--text-faint); stroke-width: 1.6; stroke-linecap: round;
+  pointer-events: none;
+}
+.search input {
+  padding-left: 36px; padding-right: 36px; min-height: 42px;
+  background: var(--surface); border-color: var(--line);
+}
+.search input::-webkit-search-cancel-button { display: none; }
+.search-clear {
+  position: absolute; right: 8px; width: 26px; height: 26px;
+  border: 0; border-radius: 50%; background: var(--surface-2);
+  color: var(--text-dim); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.search-clear:hover { color: var(--text); }
+
+.filters { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
+.chip {
+  flex: 0 0 auto;
+  font: inherit; font-size: 0.8rem; font-weight: 500;
+  padding: 6px 12px; border-radius: 999px;
+  background: transparent; color: var(--text-dim);
+  border: 1px solid var(--line-strong); cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease;
+}
+.chip:hover { color: var(--text); border-color: var(--text-faint); }
+.chip.is-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+.no-results { color: var(--text-faint); font-size: 0.88rem; padding: 24px 0; text-align: center; }
+
+/* --- dialog --- */
+.dialog {
+  width: min(520px, calc(100vw - 24px));
+  max-height: min(86dvh, 720px);
+  padding: 0; border: 1px solid var(--line-strong);
+  border-radius: var(--radius); background: var(--surface); color: var(--text);
+  box-shadow: 0 24px 60px -20px rgba(0,0,0,0.7);
+  overflow: hidden;
+}
+.dialog::backdrop { background: rgba(6,6,8,0.72); backdrop-filter: blur(3px); }
+.dialog[open] { display: flex; flex-direction: column; }
+.dialog-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 16px 18px; border-bottom: 1px solid var(--line); margin: 0;
+}
+.dialog-head h2 { font-size: 1rem; margin: 0 0 2px; letter-spacing: -0.01em; }
+.dialog-sub { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
+.dialog-close {
+  border: 0; background: transparent; color: var(--text-faint);
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 0 4px;
+}
+.dialog-close:hover { color: var(--text); }
+.dialog-body { padding: 16px 18px; overflow-y: auto; display: grid; gap: 14px; align-content: start; }
+.dialog-body label { display: grid; gap: 7px; }
+.dialog-body label + label { margin-top: 14px; }
+.dialog-hint { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
+.dialog-foot {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 14px 18px; border-top: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.dialog-foot .btn { min-width: 96px; }
+
+.progress-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.progress-head .mono { font-size: 0.75rem; color: var(--text-faint); }
+.log {
+  margin: 0; padding: 12px; max-height: 240px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7;
+  color: var(--text-dim); white-space: pre-wrap; word-break: break-word;
+}
+
+@media (max-width: 480px) {
+  .dialog-foot { flex-direction: column-reverse; }
+  .dialog-foot .btn { width: 100%; }
+}
+
+.ev-notice {
+  font-family: var(--font-mono); font-size: 0.78rem; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border-radius: var(--radius-sm); padding: 8px 10px;
 }

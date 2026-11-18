@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"opencodeweb/models"
 )
 
 // Config holds every tunable the server needs. Zero values are filled with
@@ -40,6 +42,11 @@ type Config struct {
 
 	// OpenCodeEnv is passed to every opencode CLI child (provider keys, etc).
 	OpenCodeEnv map[string]string
+
+	// ModelChain is the ordered list tried for each run: paid first, free last.
+	ModelChain models.Chain
+	// OpenRouterKey is used to discover the newest free model at runtime.
+	OpenRouterKey string
 }
 
 // Load reads configuration from the process environment.
@@ -58,11 +65,20 @@ func Load() (*Config, error) {
 		DBPath:             env("DB_PATH", dataDir+"/app/app.db"),
 		SSHKeyPath:         env("SSH_KEY_PATH", dataDir+"/ssh/id_ed25519"),
 		OpenCodeBin:        env("OPENCODE_BIN", "/usr/local/bin/opencode"),
-		OpenCodeModel:      env("OPENCODE_MODEL", "opencode/muse-spark-1.3"),
+		OpenCodeModel:      env("OPENCODE_MODEL", ""),
 		OpenCodeAgent:      env("OPENCODE_AGENT", ""),
 		OpenCodeTimeout:    envDuration("OPENCODE_TIMEOUT", 30*time.Minute),
 		GitHubAllowedOrg:   splitList(os.Getenv("GITHUB_ORGS")),
 		OpenCodeEnv:        parseEnv(os.Getenv("OPENCODE_ENV")),
+		OpenRouterKey:      os.Getenv("OPENROUTER_API_KEY"),
+	}
+
+	// Default chain: latest DeepSeek, then a free OpenRouter model.
+	chainSpec := env("OPENCODE_MODELS",
+		"openrouter/deepseek/deepseek-v4.1-flash-1017,openrouter/google/gemma-4-31b-it:free")
+	c.ModelChain = models.Parse(chainSpec)
+	if c.OpenCodeModel == "" {
+		c.OpenCodeModel = c.ModelChain.Primary
 	}
 
 	if len(c.AllowedEmails) == 0 {

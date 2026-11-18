@@ -1,0 +1,21 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/projects">Projects</a><span>/</span><span>{{.Data.Repo}}</span></nav>
+
+<div class="page-head">
+  <div>
+    <h1>{{.Data.Kind}}</h1>
+    <p class="sub mono">{{.Data.Owner}}/{{.Data.Repo}}</p>
+  </div>
+  <span class="pill pill-{{.Data.State}}" id="job-state">{{.Data.State}}</span>
+</div>
+
+<div class="progress-head">
+  <span class="mono" id="job-elapsed">{{.Data.Elapsed}}</span>
+</div>
+<pre class="log" id="job-log" data-job="{{.Data.ID}}" aria-live="polite"></pre>
+
+<div class="dialog-foot">
+  <a class="btn btn-secondary" href="/projects">Back to projects</a>
+  <a class="btn btn-primary" id="job-open" href="/projects/{{.Data.Owner}}/{{.Data.Repo}}" hidden>Open project</a>
+</div>
+{{end}}

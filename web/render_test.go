@@ -14,6 +14,7 @@ import (
 
 	"opencodeweb/auth"
 	"opencodeweb/config"
+	"opencodeweb/models"
 	"opencodeweb/ocjson"
 	"opencodeweb/projects"
 	"opencodeweb/runner"
@@ -69,8 +70,8 @@ func renderTemplate(t *testing.T, srv *Server, name string, data pageData) strin
 }
 
 func TestTemplatesParse(t *testing.T) {
-	if len(mustTemplates(t)) != 4 {
-		t.Fatalf("expected 4 page templates")
+	if len(mustTemplates(t)) != 5 {
+		t.Fatalf("expected 5 page templates")
 	}
 }
 
@@ -110,8 +111,11 @@ func TestProjectsRendersStates(t *testing.T) {
 		"loaded state": "pill-up_to_date",
 		"behind state": "update available",
 		"not loaded":   "not loaded",
-		"pull button":  `action="/projects/pull"`,
-		"clone button": `action="/projects/clone"`,
+		"pull button":  `js-pull`,
+		"clone button": `js-clone`,
+		"search box":   `id="q"`,
+		"filter chips": `data-filter="not_loaded"`,
+		"clone dialog": `id="clone-dialog"`,
 		"repo link":    "/projects/Mboukhal/loaded-repo",
 		"manual clone": "Clone a private repository by name",
 	}
@@ -141,7 +145,7 @@ func TestProjectPageRenders(t *testing.T) {
 func TestRunPageRenders(t *testing.T) {
 	srv := newTestServer(t)
 	dir := t.TempDir()
-	job, err := srv.runner.Start(context.Background(), "o", "r", dir, "hello", "", "", "")
+	job, err := srv.runner.Start(context.Background(), "o", "r", dir, "hello", "", "", "", models.Chain{Primary: "m"})
 	if err != nil && !strings.Contains(err.Error(), "starting") {
 		t.Fatalf("starting job: %v", err)
 	}

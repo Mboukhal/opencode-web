@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"opencodeweb/auth"
 	"opencodeweb/config"
 	"opencodeweb/github"
+	"opencodeweb/jobs"
 	"opencodeweb/projects"
 	"opencodeweb/runner"
 	"opencodeweb/store"
@@ -32,8 +34,13 @@ type Server struct {
 	auth     *auth.Manager
 	projects *projects.Manager
 	runner   *runner.Manager
+	jobs     *jobs.Manager
 	gh       *github.Client
 	tmpl     map[string]*template.Template
+
+	freeMu      sync.Mutex
+	freeModel   string
+	freeFetched time.Time
 }
 
 // New wires the HTTP layer.
@@ -45,7 +52,7 @@ func New(cfg *config.Config, log *slog.Logger, st *store.Store, am *auth.Manager
 		return nil, err
 	}
 	return &Server{
-		cfg: cfg, log: log, store: st, auth: am, projects: pm, runner: rm,
+		cfg: cfg, log: log, store: st, auth: am, projects: pm, runner: rm, jobs: jobs.New(),
 		gh:   github.New(githubLogin(cfg)),
 		tmpl: tmpl,
 	}, nil
@@ -83,6 +90,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /projects/remove", s.requireUser(s.handleRemove))
 	mux.Handle("POST /projects/config", s.requireUser(s.handleProjectConfig))
 	mux.Handle("GET /projects/{owner}/{repo}", s.requireUser(s.handleProject))
+	mux.Handle("GET /jobs/{id}", s.requireUser(s.handleJobPage))
+	mux.Handle("GET /jobs/{id}/events", s.requireUser(s.handleJobEvents))
+	mux.Handle("GET /api/projects", s.requireUser(s.handleProjectsAPI))
 
 	mux.Handle("POST /run", s.requireUser(s.handleRun))
 	mux.Handle("GET /run/{id}", s.requireUser(s.handleRunPage))

@@ -5,7 +5,6 @@ package runner
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"opencodeweb/event"
+	"opencodeweb/models"
 	"opencodeweb/ocjson"
 )
 
@@ -71,49 +71,10 @@ func New(bin, cfgDir, stateDir, model, agent, home string, timeout time.Duration
 }
 
 // Start launches a prompt for a project. sessionID continues an existing session.
-func (m *Manager) Start(parent context.Context, owner, repo, dir, prompt, sessionID, projectModel, projectAgent string) (*Job, error) {
-	args := []string{"run", "--standalone", "--format", "json", "--auto"}
-	if sessionID != "" {
-		args = append(args, "--session", sessionID)
-	}
-	model := firstNonEmpty(projectModel, m.model)
-	if model != "" {
-		args = append(args, "-m", model)
-	}
-	if agent := firstNonEmpty(projectAgent, m.agent); agent != "" {
-		args = append(args, "--agent", agent)
-	}
-	args = append(args, prompt)
-
+// The model chain is tried in order: when a model reports exhausted credit or a
+// rate limit, the run restarts on the next model and the UI is told why.
+func (m *Manager) Start(parent context.Context, owner, repo, dir, prompt, sessionID, projectModel, projectAgent string, chain models.Chain) (*Job, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), m.timeout)
-
-	cmd := exec.Command(m.bin, args...)
-	cmd.Dir = dir
-	cmd.Env = m.childEnv(dir)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		cancel()
-		return nil, fmt.Errorf("starting opencode: %w", err)
-	}
-	slog.Info("opencode started", "bin", m.bin, "dir", dir, "args", strings.Join(args[:len(args)-1], " "))
-
-	// exec.Command has no timeout of its own: kill the CLI when the deadline
-	// passes or the job is cancelled from the UI.
-	go func() {
-		<-ctx.Done()
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-	}()
 
 	job := &Job{
 		ID: uuid.NewString(), Owner: owner, Repo: repo, Dir: dir, Prompt: prompt,
@@ -124,14 +85,86 @@ func (m *Manager) Start(parent context.Context, owner, repo, dir, prompt, sessio
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 
-	go job.pump(ctx, stdout, stderr, cmd)
+	modelsToTry := chain.All()
+	if len(modelsToTry) == 0 {
+		modelsToTry = []string{firstNonEmpty(projectModel, m.model)}
+	}
+
+	go m.runChain(ctx, job, modelsToTry, projectAgent)
+	return job, nil
+}
+
+// runChain executes the prompt, falling back on credit exhaustion.
+func (m *Manager) runChain(ctx context.Context, job *Job, modelsToTry []string, projectAgent string) {
+	for i, model := range modelsToTry {
+		if ctx.Err() != nil {
+			job.finish(ctx.Err())
+			return
+		}
+		if i > 0 {
+			job.publish(event.Event{Type: "notice", Text: "Switched to " + model})
+		}
+		exhausted, err := m.runOnce(ctx, job, model, projectAgent)
+		if err == nil {
+			job.finish(nil)
+			return
+		}
+		if exhausted && i < len(modelsToTry)-1 {
+			slog.Warn("model exhausted, falling back", "job", job.ID, "model", model, "err", err)
+			job.publish(event.Event{Type: "notice", Text: model + " is out of credit, trying the next model"})
+			continue
+		}
+		job.finish(err)
+		return
+	}
+}
+
+// runOnce runs one model. exhausted reports whether the failure was a credit or
+// rate-limit problem, which makes a fallback worthwhile.
+func (m *Manager) runOnce(ctx context.Context, job *Job, model, projectAgent string) (exhausted bool, err error) {
+	args := []string{"run", "--standalone", "--format", "json", "--auto"}
+	if sid := job.Session(); sid != "" {
+		args = append(args, "--session", sid)
+	}
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if agent := firstNonEmpty(projectAgent, m.agent); agent != "" {
+		args = append(args, "--agent", agent)
+	}
+	args = append(args, job.Prompt)
+
+	cmd := exec.Command(m.bin, args...)
+	cmd.Dir = job.Dir
+	cmd.Env = m.childEnv(job.Dir)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return false, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return false, err
+	}
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("starting opencode: %w", err)
+	}
+	slog.Info("opencode started", "job", job.ID, "model", model, "dir", job.Dir)
+
+	// exec.Command has no timeout of its own: kill the CLI when the deadline
+	// passes or the job is cancelled from the UI.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			job.finish(fmt.Errorf("timed out after %s", m.timeout))
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+		case <-done:
 		}
 	}()
-	return job, nil
+
+	return job.pump(ctx, stdout, stderr, cmd)
 }
 
 // Job looks up a running job.
@@ -141,15 +174,20 @@ func (m *Manager) Job(id string) *Job {
 	return m.jobs[id]
 }
 
-func (j *Job) pump(ctx context.Context, stdout, stderr io.Reader, cmd *exec.Cmd) {
+func (j *Job) pump(ctx context.Context, stdout, stderr io.Reader, cmd *exec.Cmd) (exhausted bool, err error) {
 	var wg sync.WaitGroup
 	var errBuf strings.Builder
+	var eventErr strings.Builder // provider error messages from the JSON stream
 
 	wg.Go(func() {
 		s := bufio.NewScanner(stdout)
 		s.Buffer(make([]byte, 64*1024), 4*1024*1024)
 		for s.Scan() {
 			if ev, ok := ocjson.Parse(s.Text()); ok {
+				if ev.Event.Type == "error" && ev.Event.Error != "" && eventErr.Len() < 2048 {
+					eventErr.WriteString(ev.Event.Error)
+					eventErr.WriteByte('\n')
+				}
 				j.setSession(ev.SessionID)
 				j.publish(ev.Event)
 			}
@@ -170,16 +208,19 @@ func (j *Job) pump(ctx context.Context, stdout, stderr io.Reader, cmd *exec.Cmd)
 		}
 	})
 	wg.Wait()
-	err := cmd.Wait()
-	if err != nil && errBuf.Len() > 0 {
+	err = cmd.Wait()
+	if err != nil {
 		slog.Error("opencode failed", "job", j.ID, "err", err, "stderr", strings.TrimSpace(errBuf.String()))
-	} else if err != nil {
-		slog.Error("opencode failed", "job", j.ID, "err", err)
 	}
+	// Credit/rate-limit detection looks at both the JSON errors and stderr.
+	exhausted = models.IsExhaustion(eventErr.String()) || models.IsExhaustion(errBuf.String())
 	if err != nil && errBuf.Len() > 0 {
 		err = fmt.Errorf("%w: %s", err, firstLine(errBuf.String()))
 	}
-	j.finish(err)
+	if err != nil && eventErr.Len() > 0 {
+		err = fmt.Errorf("%w: %s", err, firstLine(eventErr.String()))
+	}
+	return exhausted, err
 }
 
 // Session reports the OpenCode session id discovered while running.
