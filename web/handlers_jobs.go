@@ -34,7 +34,7 @@ func (s *Server) handleJobPage(w http.ResponseWriter, r *http.Request, u *store.
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, r, "job", "Clone", newJobView(j))
+	s.render(w, r, "job", string(j.Kind), newJobView(j))
 }
 
 func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request, u *store.User) {

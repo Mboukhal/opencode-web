@@ -2,43 +2,46 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"errors"
 
-	"os/exec"
-	"time"
+	"opencodeweb/opencode"
 )
 
 // Session is a past OpenCode session for a project.
 type Session struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Updated   int64  `json:"updated"`
-	Created   int64  `json:"created"`
-	Directory string `json:"directory"`
+	ID      string
+	Title   string
+	Updated int64 // Unix milliseconds
+	Created int64
 }
 
-// ListSessions returns recent sessions created in dir.
+// ListSessions returns recent sessions created in dir, newest first.
 func (m *Manager) ListSessions(ctx context.Context, dir string, limit int) ([]Session, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, m.bin, "session", "list", "--standalone", "--format", "json", "-n", fmt.Sprint(limit))
-	cmd.Dir = dir
-	cmd.Env = m.childEnv(dir)
-	out, err := cmd.Output()
+	client := m.Client()
+	if client == nil {
+		return nil, errors.New("the OpenCode server is not running yet")
+	}
+	list, err := client.ListSessions(ctx, dir, limit)
 	if err != nil {
-		return nil, fmt.Errorf("listing opencode sessions: %w", err)
+		return nil, err
 	}
-	var all []Session
-	if err := json.Unmarshal(out, &all); err != nil {
-		return nil, fmt.Errorf("decoding sessions: %w", err)
-	}
-	var mine []Session
-	for _, s := range all {
-		if s.Directory == "" || s.Directory == dir {
-			mine = append(mine, s)
+	out := make([]Session, 0, len(list))
+	for _, s := range list {
+		// The server filters by directory, but older builds may ignore the
+		// filter, so keep the check.
+		if d := s.Location.Directory; d != "" && d != dir {
+			continue
 		}
+		out = append(out, Session{
+			ID: s.ID, Title: sessionTitle(s), Updated: s.Updated(), Created: s.Time.Created,
+		})
 	}
-	return mine, nil
+	return out, nil
+}
+
+func sessionTitle(s opencode.Session) string {
+	if s.Title != "" {
+		return s.Title
+	}
+	return "Untitled session"
 }

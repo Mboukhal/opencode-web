@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS projects (
 	role         TEXT NOT NULL DEFAULT '',
 	cloned_at    INTEGER NOT NULL,
 	last_pull_at INTEGER,
+	last_push_at INTEGER,
 	UNIQUE(owner, repo)
 );
 
@@ -100,6 +102,12 @@ CREATE TABLE IF NOT EXISTS settings (
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("applying schema: %w", err)
+	}
+	// Databases created before push support lack the column; SQLite has no
+	// IF NOT EXISTS for ADD COLUMN, so ignore the duplicate-column error.
+	if _, err := s.db.Exec(`ALTER TABLE projects ADD COLUMN last_push_at INTEGER`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("adding last_push_at: %w", err)
 	}
 	return nil
 }

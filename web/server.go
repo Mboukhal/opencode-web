@@ -11,15 +11,17 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"opencodeweb/auth"
 	"opencodeweb/config"
 	"opencodeweb/github"
 	"opencodeweb/jobs"
+	"opencodeweb/oconfig"
+	"opencodeweb/opencode"
 	"opencodeweb/projects"
 	"opencodeweb/runner"
+	"opencodeweb/service"
 	"opencodeweb/store"
 )
 
@@ -38,24 +40,38 @@ type Server struct {
 	gh       *github.Client
 	tmpl     map[string]*template.Template
 
-	freeMu      sync.Mutex
-	freeModel   string
-	freeFetched time.Time
+	// svc supervises the shared OpenCode server; ocfg deploys skills and keys.
+	svc  *service.Manager
+	ocfg *oconfig.Config
+
+	// client returns the live OpenCode API client, or nil while starting.
+	client func() *opencode.Client
 }
 
 // New wires the HTTP layer.
 func New(cfg *config.Config, log *slog.Logger, st *store.Store, am *auth.Manager,
-	pm *projects.Manager, rm *runner.Manager) (*Server, error) {
+	pm *projects.Manager, rm *runner.Manager, svc *service.Manager, ocfg *oconfig.Config) (*Server, error) {
 
 	tmpl, err := parseTemplates()
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		cfg: cfg, log: log, store: st, auth: am, projects: pm, runner: rm, jobs: jobs.New(),
 		gh:   github.New(githubLogin(cfg)),
 		tmpl: tmpl,
-	}, nil
+		svc:  svc,
+		ocfg: ocfg,
+	}
+	if svc != nil {
+		s.client = svc.Client
+	} else if rm != nil {
+		s.client = rm.Client
+	}
+	if s.client == nil {
+		s.client = func() *opencode.Client { return nil }
+	}
+	return s, nil
 }
 
 func githubLogin(cfg *config.Config) string {
@@ -87,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /projects/sync", s.requireUser(s.handleSyncRepos))
 	mux.Handle("POST /projects/clone", s.requireUser(s.handleClone))
 	mux.Handle("POST /projects/pull", s.requireUser(s.handlePull))
+	mux.Handle("POST /projects/push", s.requireUser(s.handlePush))
 	mux.Handle("POST /projects/remove", s.requireUser(s.handleRemove))
 	mux.Handle("POST /projects/config", s.requireUser(s.handleProjectConfig))
 	mux.Handle("GET /projects/{owner}/{repo}", s.requireUser(s.handleProject))
@@ -94,24 +111,24 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /jobs/{id}/events", s.requireUser(s.handleJobEvents))
 	mux.Handle("GET /api/projects", s.requireUser(s.handleProjectsAPI))
 
+	mux.Handle("GET /mobile", s.requireUser(s.handleMobile))
+	mux.Handle("POST /mobile/pair", s.requireUser(s.handlePair))
+	mux.Handle("GET /settings", s.requireUser(s.handleSettings))
+
+	mux.HandleFunc("GET /qr.svg", s.qrHandler)
+
 	mux.Handle("POST /run", s.requireUser(s.handleRun))
+	mux.Handle("POST /run/{id}/cancel", s.requireUser(s.handleRunCancel))
 	mux.Handle("GET /run/{id}", s.requireUser(s.handleRunPage))
 	mux.Handle("GET /run/{id}/events", s.requireUser(s.handleRunEvents))
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(mustSub(assets, "static"))))
 
-	return s.withCommon(mux)
+	return s.withCommon(s.securityHeaders(mux))
 }
 
 func (s *Server) withCommon(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "same-origin")
-		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data: https://lh3.googleusercontent.com https://avatars.githubusercontent.com; "+
-				"style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		s.log.Info("request", "method", r.Method, "path", r.URL.Path, "dur", time.Since(start).Round(time.Millisecond))
@@ -139,7 +156,7 @@ func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, *stor
 	})
 }
 
-// CurrentUser is exposed for templates that embed the user.
+// currentUser is exposed for templates that embed the user.
 func (s *Server) currentUser(r *http.Request) *store.User {
 	u, _ := s.auth.CurrentUser(r)
 	return u
@@ -224,4 +241,13 @@ func parseTemplates() (map[string]*template.Template, error) {
 		out[strings.TrimSuffix(e.Name(), ".html")] = t
 	}
 	return out, nil
+}
+
+// opencodeClient returns the live API client or writes an error.
+func (s *Server) opencodeClient(w http.ResponseWriter) *opencode.Client {
+	client := s.client()
+	if client == nil {
+		http.Error(w, "the OpenCode server is not running yet", http.StatusServiceUnavailable)
+	}
+	return client
 }

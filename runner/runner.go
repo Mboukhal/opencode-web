@@ -1,25 +1,24 @@
-// Package runner drives the OpenCode CLI: it launches a prompt inside a project
-// directory, streams events, and exposes session history.
+// Package runner drives prompts through the shared OpenCode server: it creates
+// or resumes a session in the project directory, sends the prompt, and relays
+// the server's event stream to the browser.
+//
+// Going through the shared server (the same one OpenCode Mobile pairs with)
+// means a session started here keeps running on this machine and can be opened
+// from the phone, and vice versa.
 package runner
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"os"
-	"os/exec"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"opencodeweb/event"
-	"opencodeweb/models"
-	"opencodeweb/ocjson"
+	"opencodeweb/opencode"
 )
 
 // Job is one running prompt.
@@ -30,141 +29,120 @@ type Job struct {
 	Dir       string
 	Prompt    string
 	SessionID string
+	StartedAt time.Time
+
+	terminal chan struct{} // closed when the turn ends on the server
+	termOnce sync.Once
 
 	mu        sync.Mutex
 	listeners map[chan event.Event]struct{}
 	buffer    []event.Event
 	done      bool
 	err       error
-	startedAt time.Time
+	failMsg   string
 	cancel    context.CancelFunc
+	client    *opencode.Client
 }
 
-// Manager launches jobs and keeps recent history.
+// Manager launches prompts against the OpenCode server.
 type Manager struct {
-	bin      string
-	cfgDir   string
-	stateDir string
-	model    string
-	agent    string
-	timeout  time.Duration
-	home     string
-
-	runnerEnv []string
+	// ClientFn resolves the OpenCode client. It is a function so the manager can
+	// be constructed before the background server has finished starting.
+	ClientFn func() *opencode.Client
+	Timeout  time.Duration
 
 	mu   sync.Mutex
 	jobs map[string]*Job
 }
 
-// New creates a Runner manager.
-func New(bin, cfgDir, stateDir, model, agent, home string, timeout time.Duration, runnerEnv map[string]string) *Manager {
-	env := make([]string, 0, len(runnerEnv))
-	for k, v := range runnerEnv {
-		env = append(env, k+"="+v)
+// New creates a Runner manager bound to a client provider.
+func New(client func() *opencode.Client, timeout time.Duration) *Manager {
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
 	}
-	sort.Strings(env)
-	return &Manager{
-		bin: bin, cfgDir: cfgDir, stateDir: stateDir, model: model,
-		agent: agent, timeout: timeout, home: home, jobs: make(map[string]*Job),
-		runnerEnv: env,
-	}
+	return &Manager{ClientFn: client, Timeout: timeout, jobs: make(map[string]*Job)}
 }
 
-// Start launches a prompt for a project. sessionID continues an existing session.
-// The model chain is tried in order: when a model reports exhausted credit or a
-// rate limit, the run restarts on the next model and the UI is told why.
-func (m *Manager) Start(parent context.Context, owner, repo, dir, prompt, sessionID, projectModel, projectAgent string, chain models.Chain) (*Job, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), m.timeout)
+// Start creates a job, opens (or resumes) the session, and sends the prompt.
+// sessionID continues an existing session; empty starts a new one titled with
+// the first line of the prompt.
+func (m *Manager) Start(ctx context.Context, owner, repo, dir, prompt, sessionID string) (*Job, error) {
+	client := m.Client()
+	if client == nil {
+		return nil, errors.New("the OpenCode server is not running yet")
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.Timeout)
+
+	if sessionID == "" {
+		s, err := client.CreateSession(ctx, dir, title(prompt))
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("creating session: %w", err)
+		}
+		sessionID = s.ID
+	}
 
 	job := &Job{
 		ID: uuid.NewString(), Owner: owner, Repo: repo, Dir: dir, Prompt: prompt,
 		SessionID: sessionID, listeners: make(map[chan event.Event]struct{}),
-		startedAt: time.Now(), cancel: cancel,
+		StartedAt: time.Now(), cancel: cancel, client: client,
+		terminal: make(chan struct{}),
 	}
 	m.mu.Lock()
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
 
-	modelsToTry := chain.All()
-	if len(modelsToTry) == 0 {
-		modelsToTry = []string{firstNonEmpty(projectModel, m.model)}
-	}
-
-	go m.runChain(ctx, job, modelsToTry, projectAgent)
+	go m.run(ctx, job, client)
 	return job, nil
 }
 
-// runChain executes the prompt, falling back on credit exhaustion.
-func (m *Manager) runChain(ctx context.Context, job *Job, modelsToTry []string, projectAgent string) {
-	for i, model := range modelsToTry {
-		if ctx.Err() != nil {
-			job.finish(ctx.Err())
-			return
-		}
-		if i > 0 {
-			job.publish(event.Event{Type: "notice", Text: "Switched to " + model})
-		}
-		exhausted, err := m.runOnce(ctx, job, model, projectAgent)
-		if err == nil {
-			job.finish(nil)
-			return
-		}
-		if exhausted && i < len(modelsToTry)-1 {
-			slog.Warn("model exhausted, falling back", "job", job.ID, "model", model, "err", err)
-			job.publish(event.Event{Type: "notice", Text: model + " is out of credit, trying the next model"})
-			continue
-		}
-		job.finish(err)
+// run subscribes to events, then submits the prompt so no early output is lost.
+func (m *Manager) run(ctx context.Context, job *Job, client *opencode.Client) {
+	defer job.cancel()
+
+	// Subscribe first: the server only emits execution events after we are
+	// listening, which avoids a race where the first tokens are missed.
+	drained := make(chan error, 1)
+	streamCtx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	go func() {
+		drained <- client.Drain(streamCtx, job.SessionID, job.publish)
+	}()
+
+	// Give the subscription a moment to attach before the prompt is admitted.
+	time.Sleep(150 * time.Millisecond)
+
+	if err := client.Prompt(ctx, job.SessionID, job.Prompt); err != nil {
+		stopStream()
+		job.finish(fmt.Errorf("sending prompt: %w", err))
 		return
+	}
+
+	// The event stream stays open for every session on the server, so the job
+	// cannot wait for it to close. terminal is closed when the turn ends.
+	select {
+	case <-ctx.Done():
+		job.finish(ctx.Err())
+	case <-job.terminal:
+		stopStream()
+		job.finish(job.failure())
+	case err := <-drained:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			slog.Warn("event stream ended", "job", job.ID, "err", err)
+			job.finish(fmt.Errorf("event stream ended: %w", err))
+			return
+		}
+		job.finish(job.failure())
 	}
 }
 
-// runOnce runs one model. exhausted reports whether the failure was a credit or
-// rate-limit problem, which makes a fallback worthwhile.
-func (m *Manager) runOnce(ctx context.Context, job *Job, model, projectAgent string) (exhausted bool, err error) {
-	args := []string{"run", "--standalone", "--format", "json", "--auto"}
-	if sid := job.Session(); sid != "" {
-		args = append(args, "--session", sid)
+// Client returns the live OpenCode client, or nil before the server starts.
+func (m *Manager) Client() *opencode.Client {
+	if m.ClientFn == nil {
+		return nil
 	}
-	if model != "" {
-		args = append(args, "-m", model)
-	}
-	if agent := firstNonEmpty(projectAgent, m.agent); agent != "" {
-		args = append(args, "--agent", agent)
-	}
-	args = append(args, job.Prompt)
-
-	cmd := exec.Command(m.bin, args...)
-	cmd.Dir = job.Dir
-	cmd.Env = m.childEnv(job.Dir)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return false, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return false, err
-	}
-	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("starting opencode: %w", err)
-	}
-	slog.Info("opencode started", "job", job.ID, "model", model, "dir", job.Dir)
-
-	// exec.Command has no timeout of its own: kill the CLI when the deadline
-	// passes or the job is cancelled from the UI.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			if cmd.Process != nil {
-				cmd.Process.Kill()
-			}
-		case <-done:
-		}
-	}()
-
-	return job.pump(ctx, stdout, stderr, cmd)
+	return m.ClientFn()
 }
 
 // Job looks up a running job.
@@ -174,74 +152,24 @@ func (m *Manager) Job(id string) *Job {
 	return m.jobs[id]
 }
 
-func (j *Job) pump(ctx context.Context, stdout, stderr io.Reader, cmd *exec.Cmd) (exhausted bool, err error) {
-	var wg sync.WaitGroup
-	var errBuf strings.Builder
-	var eventErr strings.Builder // provider error messages from the JSON stream
-
-	wg.Go(func() {
-		s := bufio.NewScanner(stdout)
-		s.Buffer(make([]byte, 64*1024), 4*1024*1024)
-		for s.Scan() {
-			if ev, ok := ocjson.Parse(s.Text()); ok {
-				if ev.Event.Type == "error" && ev.Event.Error != "" && eventErr.Len() < 2048 {
-					eventErr.WriteString(ev.Event.Error)
-					eventErr.WriteByte('\n')
-				}
-				j.setSession(ev.SessionID)
-				j.publish(ev.Event)
-			}
-		}
-	})
-	wg.Go(func() {
-		s := bufio.NewScanner(stderr)
-		s.Buffer(make([]byte, 64*1024), 1<<20)
-		for s.Scan() {
-			line := s.Text()
-			if strings.HasPrefix(line, "timestamp=") {
-				continue
-			}
-			if errBuf.Len() < 4096 {
-				errBuf.WriteString(line)
-				errBuf.WriteByte('\n')
-			}
-		}
-	})
-	wg.Wait()
-	err = cmd.Wait()
-	if err != nil {
-		slog.Error("opencode failed", "job", j.ID, "err", err, "stderr", strings.TrimSpace(errBuf.String()))
-	}
-	// Credit/rate-limit detection looks at both the JSON errors and stderr.
-	exhausted = models.IsExhaustion(eventErr.String()) || models.IsExhaustion(errBuf.String())
-	if err != nil && errBuf.Len() > 0 {
-		err = fmt.Errorf("%w: %s", err, firstLine(errBuf.String()))
-	}
-	if err != nil && eventErr.Len() > 0 {
-		err = fmt.Errorf("%w: %s", err, firstLine(eventErr.String()))
-	}
-	return exhausted, err
-}
-
-// Session reports the OpenCode session id discovered while running.
+// Session reports the OpenCode session id.
 func (j *Job) Session() string {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.SessionID
 }
 
-func (j *Job) setSession(id string) {
-	if id == "" {
-		return
-	}
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.SessionID == "" {
-		j.SessionID = id
-	}
-}
-
 func (j *Job) publish(ev event.Event) {
+	// Errors carry the failure message; the run still has to be marked done so
+	// the UI stops waiting for a turn the server already abandoned.
+	if ev.Type == "error" && ev.Error != "" {
+		j.mu.Lock()
+		if j.failMsg == "" {
+			j.failMsg = ev.Error
+		}
+		j.mu.Unlock()
+	}
+
 	j.mu.Lock()
 	if j.done {
 		j.mu.Unlock()
@@ -263,6 +191,20 @@ func (j *Job) publish(ev event.Event) {
 		default: // slow subscriber; it can replay from the buffer
 		}
 	}
+
+	if ev.Type == "done" || ev.Type == "error" {
+		j.termOnce.Do(func() { close(j.terminal) })
+	}
+}
+
+// failure reports the error recorded while the turn ran, if any.
+func (j *Job) failure() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.failMsg == "" {
+		return nil
+	}
+	return errors.New(j.failMsg)
 }
 
 func (j *Job) finish(err error) {
@@ -289,7 +231,6 @@ func (j *Job) finish(err error) {
 		default:
 		}
 	}
-	j.cancel()
 }
 
 // Subscribe returns buffered events and a channel of new ones.
@@ -316,51 +257,45 @@ func (j *Job) Subscribe() ([]event.Event, <-chan event.Event, func()) {
 	}
 }
 
-// Cancel stops the underlying CLI process.
-func (j *Job) Cancel() { j.cancel() }
-
-// StartedAt reports when the job began.
-func (j *Job) StartedAt() time.Time { return j.startedAt }
-
-func (m *Manager) childEnv(dir string) []string {
-	return append(cleanEnv(), append(m.runnerEnv,
-		"HOME="+m.home,
-		"PWD="+dir, // OpenCode resolves project .opencode/ from PWD, not cwd
-		"XDG_CONFIG_HOME="+m.cfgDir,
-		"XDG_DATA_HOME="+m.stateDir,
-		"XDG_STATE_HOME="+m.stateDir,
-		"OPENCODE_CONFIG_DIR="+m.cfgDir,
-		"TERM=dumb",
-		"CI=1",
-	)...)
-}
-
-// cleanEnv drops server credentials so prompts never see the OAuth secret.
-func cleanEnv() []string {
-	var out []string
-	for _, kv := range os.Environ() {
-		name, _, _ := strings.Cut(kv, "=")
-		switch name {
-		case "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ALLOWED_EMAILS", "PUBLIC_BASE_URL":
-			continue
-		}
-		out = append(out, kv)
+// Cancel stops this job and interrupts the running turn on the server.
+func (j *Job) Cancel() {
+	j.cancel()
+	if j.client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = j.client.Interrupt(ctx, j.Session())
 	}
-	return out
 }
 
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
+// StartedAt reports when the job began (kept as a method for templates).
+func (j *Job) Started() time.Time { return j.StartedAt }
+
+// Err reports the failure, if any.
+func (j *Job) Err() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.err
+}
+
+func title(prompt string) string {
+	s := prompt
+	if i := indexByte(s, '\n'); i > 0 {
+		s = s[:i]
 	}
-	return ""
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+	if len(s) > 80 {
+		s = s[:80] + "…"
+	}
+	if s == "" {
+		return "OpenCode session"
 	}
 	return s
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }

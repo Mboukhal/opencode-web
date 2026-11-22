@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenCode Mobile</string>
+
+    <string name="connect_title">Connect to OpenCode</string>
+    <string name="connect_hint">Enter the address of your OpenCode server, then the server password. The password is sent over TLS only and stored encrypted on this phone.</string>
+    <string name="label_origin">Server address</string>
+    <string name="hint_origin">https://opencode.mboukhal.dev</string>
+    <string name="label_password">Server password</string>
+    <string name="hint_password">The password printed by opencode serve</string>
+    <string name="label_cleartext">Allow plain HTTP (local LAN only)</string>
+    <string name="connect">Connect</string>
+    <string name="connecting">Checking server…</string>
+    <string name="connected_version">Connected to OpenCode %1$s</string>
+
+    <string name="err_empty_origin">Enter the server address.</string>
+    <string name="err_bad_origin">That is not a valid server address. Use https://host[:port].</string>
+    <string name="err_empty_password">Enter the server password.</string>
+    <string name="err_cleartext">Plain HTTP is disabled. Tick the LAN box if you really mean it.</string>
+    <string name="err_generic">Could not connect.</string>
+
+    <string name="sessions_title">Sessions</string>
+    <string name="label_project">Project</string>
+    <string name="refresh">Refresh</string>
+    <string name="new_session">New</string>
+    <string name="disconnect">Sign out</string>
+    <string name="loading">Loading…</string>
+    <string name="creating_session">Creating session…</string>
+    <string name="new_session_title">New session</string>
+    <string name="no_sessions">No sessions in this project yet. Press New to start one.</string>
+    <string name="session_count">%1$d sessions</string>
+    <string name="err_need_directory">OpenCode needs a project directory. Pick a project first.</string>
+
+    <string name="chat_title">Session</string>
+    <string name="hint_prompt">Ask OpenCode to do something…</string>
+    <string name="send">Send</string>
+    <string name="stop">Stop</string>
+    <string name="err_no_session">No session selected.</string>
+</resources>

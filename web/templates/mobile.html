@@ -1,0 +1,62 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/projects">Projects</a><span>/</span><span>Mobile</span></nav>
+
+<div class="page-head">
+  <div>
+    <h1>OpenCode Mobile</h1>
+    <p class="sub">Sessions started here run on this server. Pair the app once and pick them up from your phone.</p>
+  </div>
+  <span class="pill {{if .Data.Ready}}pill-up_to_date{{else}}pill-behind{{end}}">
+    {{if .Data.Ready}}server online{{else}}server starting{{end}}
+  </span>
+</div>
+
+{{if .Data.PairError}}<p class="alert alert-warn">{{.Data.PairError}}</p>{{end}}
+{{if .Data.PairWarning}}<p class="alert alert-error">{{.Data.PairWarning}}</p>{{end}}
+
+<section class="panel">
+  <h2 class="panel-title">1. Get the app</h2>
+  <p class="panel-hint">
+    OpenCode Mobile is a remote for OpenCode on this computer. Your sessions keep running here;
+    the app shows them and lets you steer them.
+  </p>
+  <div class="btn-row">
+    <a class="btn btn-secondary" href="https://testflight.apple.com/join/M9eFEE1q">iPhone (TestFlight)</a>
+    <a class="btn btn-secondary" href="https://play.google.com/store/apps/details?id=ai.opencode.mobilecode">Android (Play Store)</a>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">2. Create a pairing link</h2>
+  <p class="panel-hint">
+    The link works once and expires in 5 minutes. Scan the QR code with the app, or open the link on the phone.
+  </p>
+
+  {{if .Data.PairURL}}
+    <div class="pair">
+      <div class="qr">{{.Data.QR}}</div>
+      <div class="pair-link">
+        <label for="pair-url">One-time link</label>
+        <input id="pair-url" class="mono" value="{{.Data.PairURL}}" readonly onclick="this.select()">
+        <p class="dialog-hint">Expires 5 minutes after it was created.</p>
+      </div>
+    </div>
+  {{end}}
+
+  <form method="post" action="/mobile/pair">
+    <button class="btn btn-primary" type="submit" {{if not .Data.Ready}}disabled{{end}}>
+      {{if .Data.PairURL}}Create a new link{{else}}Generate pairing link{{end}}
+    </button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">3. Or use the terminal on this server</h2>
+  <p class="panel-hint">Pairing codes can also be printed from the command line:</p>
+  <pre class="log">opencode pair --remote --yes</pre>
+  <p class="panel-hint">
+    <code>--remote</code> routes through an OpenTunnel address so the phone works from any network.
+    The server here listens on <code>{{.Data.ServerAddr}}</code>.
+  </p>
+</section>
+{{end}}

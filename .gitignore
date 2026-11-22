@@ -4,3 +4,10 @@
 .env
 /data/
 /opencode-web
+
+# Android build output and local SDK path
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+android/*.iml

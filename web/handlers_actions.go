@@ -11,7 +11,6 @@ import (
 	"opencodeweb/event"
 	"opencodeweb/github"
 	"opencodeweb/jobs"
-	"opencodeweb/models"
 	"opencodeweb/projects"
 	"opencodeweb/store"
 )
@@ -99,6 +98,34 @@ func (s *Server) handlePull(w http.ResponseWriter, r *http.Request, u *store.Use
 	http.Redirect(w, r, "/jobs/"+job.ID, http.StatusFound)
 }
 
+// handlePush commits (optionally) and pushes the branch to GitHub over SSH.
+func (s *Server) handlePush(w http.ResponseWriter, r *http.Request, u *store.User) {
+	owner, repo, ok := formRepo(r)
+	if !ok {
+		http.Error(w, "invalid repository name", http.StatusBadRequest)
+		return
+	}
+	message := strings.TrimSpace(r.FormValue("message"))
+	ask := r.FormValue("commit") == "1"
+
+	job := s.jobs.Start(jobs.KindPush, owner, repo)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		err := s.projects.Push(ctx, owner, repo, message, ask, job.Log)
+		if err != nil {
+			s.log.Error("push failed", "repo", repo, "err", err)
+		}
+		job.Finish(err)
+	}()
+
+	if r.Header.Get("Accept") == "application/json" {
+		writeJSON(w, http.StatusAccepted, map[string]string{"job": job.ID})
+		return
+	}
+	http.Redirect(w, r, "/jobs/"+job.ID, http.StatusFound)
+}
+
 func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request, u *store.User) {
 	owner, repo, ok := formRepo(r)
 	if !ok {
@@ -138,6 +165,13 @@ type projectPage struct {
 	Detail   string
 	Busy     bool
 	Sessions []SessionView
+	Skills   []string
+	// Key state for the SSH/push panel.
+	HasKey      bool
+	KeyExists   bool
+	KeyPath     string
+	Fingerprint string
+	LastPush    string
 }
 
 // SessionView is a past session shown on the project page.
@@ -166,6 +200,13 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request, u *store.
 	st, detail := s.projects.Status(r.Context(), owner, repo)
 	page := projectPage{Project: *p, Status: st, Detail: detail, Busy: s.projects.IsBusy(owner, repo)}
 
+	key := s.projects.InspectKey()
+	page.HasKey, page.KeyExists, page.KeyPath = true, key.Exists, key.Path
+	page.Fingerprint = key.Fingerprint
+	if p.LastPushAt != nil {
+		page.LastPush = p.LastPushAt.Format("2 Jan 2006 15:04")
+	}
+
 	if st != projects.StatusNotLoaded {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		sess, err := s.runner.ListSessions(ctx, p.Path, 10)
@@ -174,6 +215,15 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request, u *store.
 			for _, x := range sess {
 				page.Sessions = append(page.Sessions, SessionView{ID: x.ID, Title: x.Title, Updated: x.Updated})
 			}
+		}
+		if client := s.client(); client != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			if skills, err := client.Skills(ctx, p.Path); err == nil {
+				for _, sk := range skills {
+					page.Skills = append(page.Skills, sk.Name)
+				}
+			}
+			cancel()
 		}
 	}
 	s.render(w, r, "project", p.Name(), page)
@@ -197,20 +247,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, u *store.User
 	}
 	sessionID := r.FormValue("session")
 
-	// The agent must resolve by id: fall back to the file name the app writes
-	// when the stored value is empty.
-	agent := p.Agent
-	if p.Role != "" && agent == "" {
-		agent = "project"
-	}
-
-	// Per-project model wins; otherwise fall back to the configured chain
-	// (paid model first, free model when credit runs out).
-	chain := s.effectiveChain(r.Context())
-	if p.Model != "" {
-		chain = models.Chain{Primary: p.Model, Fallbacks: s.cfg.ModelChain.All()}
-	}
-	job, err := s.runner.Start(r.Context(), owner, repo, p.Path, prompt, sessionID, p.Model, agent, chain)
+	job, err := s.runner.Start(r.Context(), owner, repo, p.Path, prompt, sessionID)
 	if err != nil {
 		s.log.Error("starting run", "err", err)
 		http.Error(w, "could not start opencode: "+err.Error(), http.StatusInternalServerError)
@@ -219,39 +256,15 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, u *store.User
 	http.Redirect(w, r, "/run/"+job.ID, http.StatusFound)
 }
 
-// effectiveChain returns the configured chain, with the newest free OpenRouter
-// model substituted as the last resort so it keeps working as free models
-// rotate. The result is cached for an hour.
-func (s *Server) effectiveChain(ctx context.Context) models.Chain {
-	chain := s.cfg.ModelChain
-	if s.cfg.OpenRouterKey == "" {
-		return chain
+// handleRunCancel interrupts the running turn for a job.
+func (s *Server) handleRunCancel(w http.ResponseWriter, r *http.Request, u *store.User) {
+	job := s.runner.Job(r.PathValue("id"))
+	if job == nil {
+		http.NotFound(w, r)
+		return
 	}
-
-	s.freeMu.Lock()
-	free, fetched := s.freeModel, s.freeFetched
-	s.freeMu.Unlock()
-	if fetched.IsZero() || time.Since(fetched) > time.Hour {
-		if m := models.FreeModel(ctx, s.cfg.OpenRouterKey); m != "" {
-			free = m
-		}
-		s.freeMu.Lock()
-		s.freeModel, s.freeFetched = free, time.Now()
-		s.freeMu.Unlock()
-	}
-	if free == "" {
-		return chain
-	}
-
-	// Append the discovered model unless it is already in the chain.
-	for _, id := range chain.All() {
-		if id == free {
-			return chain
-		}
-	}
-	out := models.Chain{Primary: chain.Primary, Fallbacks: append([]string(nil), chain.Fallbacks...)}
-	out.Fallbacks = append(out.Fallbacks, free)
-	return out
+	job.Cancel()
+	writeJSON(w, http.StatusOK, map[string]string{"state": "stopping"})
 }
 
 func (s *Server) handleRunPage(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -339,3 +339,49 @@ textarea { resize: vertical; }
   background: color-mix(in srgb, var(--warn) 10%, transparent);
   border-radius: var(--radius-sm); padding: 8px 10px;
 }
+
+/* ---------- navigation, mobile pairing and settings ---------- */
+.topnav { display: flex; gap: 4px; margin-left: auto; margin-right: 8px; }
+.topnav a {
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  font-size: 0.82rem; color: var(--text-faint); text-decoration: none;
+}
+.topnav a:hover { color: var(--text); background: var(--surface-muted, rgba(255,255,255,0.05)); }
+
+.btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.btn-row form { margin: 0; }
+
+.pair { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; margin: 14px 0; }
+.qr {
+  background: #fff; padding: 8px; border-radius: 10px; line-height: 0;
+  width: 216px; height: 216px;
+}
+.qr svg { width: 200px; height: 200px; display: block; }
+.pair-link { flex: 1 1 240px; min-width: 0; }
+.pair-link input {
+  width: 100%; font-size: 0.78rem; padding: 10px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: var(--surface, rgba(255,255,255,0.04)); color: var(--text);
+}
+
+.kv { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.kv li { display: flex; justify-content: space-between; gap: 14px; font-size: 0.86rem; flex-wrap: wrap; }
+.kv span:first-child { color: var(--text-faint); }
+.kv .ok { color: var(--accent); }
+.kv .bad { color: var(--danger); }
+
+.chips-readonly { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+
+.push-form { margin-top: 14px; }
+.session-list li { flex-wrap: wrap; }
+.session-resume { display: flex; gap: 8px; width: 100%; margin: 0; }
+.session-resume input {
+  flex: 1; min-width: 0; font-size: 0.82rem; padding: 8px 10px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border, rgba(255,255,255,0.12));
+  background: var(--surface, rgba(255,255,255,0.04)); color: var(--text);
+}
+
+@media (max-width: 520px) {
+  .topnav a { padding: 6px 6px; font-size: 0.78rem; }
+  .qr, .qr svg { width: 180px; height: 180px; }
+}

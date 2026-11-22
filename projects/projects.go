@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,8 @@ type Manager struct {
 	mu    sync.Mutex
 	busy  map[string]bool
 	gitEn []string // extra env vars for git
+
+	logger *slog.Logger
 }
 
 // New creates a Manager. keyPath may be "" to use the default ssh agent.
@@ -113,6 +116,79 @@ func (m *Manager) Clone(ctx context.Context, owner, repo, model, agent, role str
 	}
 	progress("writing opencode config")
 	return m.WriteConfig(ctx, owner, repo, model, agent, role)
+}
+
+// Push commits the working tree (when ask) and pushes the current branch to
+// origin over SSH. It refuses to force-push: a diverged branch is an error the
+// user resolves with Pull first.
+func (m *Manager) Push(ctx context.Context, owner, repo, message string, ask bool, progress func(string)) error {
+	if !m.claim(owner, repo) {
+		return fmt.Errorf("an operation is already running for %s/%s", owner, repo)
+	}
+	defer m.release(owner, repo)
+
+	dir := m.Dir(owner, repo)
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
+		return fmt.Errorf("%s/%s is not cloned", owner, repo)
+	}
+
+	out, err := m.git(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != "" {
+		if !ask {
+			return fmt.Errorf("working tree has uncommitted changes; commit them first")
+		}
+		if strings.TrimSpace(message) == "" {
+			message = "opencode: sync from phone"
+		}
+		branch, err := m.branch(ctx, dir)
+		if err != nil {
+			return err
+		}
+		progress("staging changes on " + branch)
+		if _, err := m.git(ctx, dir, "add", "-A"); err != nil {
+			return err
+		}
+		progress("committing")
+		if _, err := m.git(ctx, dir, "commit", "-m", message); err != nil {
+			return err
+		}
+	}
+
+	branch, err := m.branch(ctx, dir)
+	if err != nil {
+		return err
+	}
+
+	// Refuse to overwrite work that only exists on the remote.
+	if status, detail := m.Status(ctx, owner, repo); status == StatusDiverged || status == StatusBehind {
+		return fmt.Errorf("branch %s is %s; pull before pushing", branch, strings.ToLower(detail))
+	}
+
+	progress("pushing " + branch + " to origin")
+	if _, err := m.gitStream(ctx, dir, progress, "push", "--progress", "origin", branch); err != nil {
+		return err
+	}
+	progress("pushed")
+	if err := m.store.MarkPushed(ctx, owner, repo); err != nil {
+		m.log().Warn("recording push", "repo", owner+"/"+repo, "err", err)
+	}
+	return nil
+}
+
+// branch reports the checked-out branch name.
+func (m *Manager) branch(ctx context.Context, dir string) (string, error) {
+	out, err := m.git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(out)
+	if name == "" || name == "HEAD" {
+		return "", fmt.Errorf("repository is not on a branch")
+	}
+	return name, nil
 }
 
 // Pull fetches and fast-forwards the clone. It refuses to touch a dirty tree.
@@ -325,3 +401,13 @@ func firstLines(s string, n int) string {
 	}
 	return strings.Join(lines, " / ")
 }
+
+func (m *Manager) log() *slog.Logger {
+	if m.logger != nil {
+		return m.logger
+	}
+	return slog.Default()
+}
+
+// SetLogger replaces the default logger.
+func (m *Manager) SetLogger(l *slog.Logger) { m.logger = l }

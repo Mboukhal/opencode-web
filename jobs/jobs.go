@@ -15,6 +15,7 @@ type Kind string
 const (
 	KindClone Kind = "clone"
 	KindPull  Kind = "pull"
+	KindPush  Kind = "push"
 )
 
 // State is the lifecycle of a job.

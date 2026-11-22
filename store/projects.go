@@ -18,6 +18,7 @@ type Project struct {
 	Role       string
 	ClonedAt   time.Time
 	LastPullAt *time.Time
+	LastPushAt *time.Time
 }
 
 // Name is the local directory name.
@@ -39,7 +40,7 @@ func (s *Store) AddProject(ctx context.Context, p Project) (*Project, error) {
 // Project looks up one project.
 func (s *Store) Project(ctx context.Context, owner, repo string) (*Project, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, owner, repo, path, model, agent, role, cloned_at, last_pull_at
+		SELECT id, owner, repo, path, model, agent, role, cloned_at, last_pull_at, last_push_at
 		FROM projects WHERE owner = ? AND repo = ?`, owner, repo)
 	return scanProject(row)
 }
@@ -47,7 +48,7 @@ func (s *Store) Project(ctx context.Context, owner, repo string) (*Project, erro
 // Projects lists all projects, newest first.
 func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, owner, repo, path, model, agent, role, cloned_at, last_pull_at
+		SELECT id, owner, repo, path, model, agent, role, cloned_at, last_pull_at, last_push_at
 		FROM projects ORDER BY owner COLLATE NOCASE, repo COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("listing projects: %w", err)
@@ -72,6 +73,14 @@ func (s *Store) SetProjectConfig(ctx context.Context, owner, repo, model, agent,
 	return err
 }
 
+// MarkPushed records a successful push.
+func (s *Store) MarkPushed(ctx context.Context, owner, repo string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE projects SET last_push_at = ? WHERE owner = ? AND repo = ?`,
+		time.Now().Unix(), owner, repo)
+	return err
+}
+
 // MarkPulled records a successful pull.
 func (s *Store) MarkPulled(ctx context.Context, owner, repo string) error {
 	_, err := s.db.ExecContext(ctx,
@@ -89,35 +98,39 @@ func (s *Store) DeleteProject(ctx context.Context, owner, repo string) error {
 func scanProject(row *sql.Row) (*Project, error) {
 	var p Project
 	var cloned int64
-	var pulled sql.NullInt64
-	err := row.Scan(&p.ID, &p.Owner, &p.Repo, &p.Path, &p.Model, &p.Agent, &p.Role, &cloned, &pulled)
+	var pulled, pushed sql.NullInt64
+	err := row.Scan(&p.ID, &p.Owner, &p.Repo, &p.Path, &p.Model, &p.Agent, &p.Role, &cloned, &pulled, &pushed)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scanning project: %w", err)
 	}
-	finishProject(&p, cloned, pulled)
+	finishProject(&p, cloned, pulled, pushed)
 	return &p, nil
 }
 
 func scanProjectRows(rows *sql.Rows) (*Project, error) {
 	var p Project
 	var cloned int64
-	var pulled sql.NullInt64
-	err := rows.Scan(&p.ID, &p.Owner, &p.Repo, &p.Path, &p.Model, &p.Agent, &p.Role, &cloned, &pulled)
+	var pulled, pushed sql.NullInt64
+	err := rows.Scan(&p.ID, &p.Owner, &p.Repo, &p.Path, &p.Model, &p.Agent, &p.Role, &cloned, &pulled, &pushed)
 	if err != nil {
 		return nil, fmt.Errorf("scanning project rows: %w", err)
 	}
-	finishProject(&p, cloned, pulled)
+	finishProject(&p, cloned, pulled, pushed)
 	return &p, nil
 }
 
-func finishProject(p *Project, cloned int64, pulled sql.NullInt64) {
+func finishProject(p *Project, cloned int64, pulled, pushed sql.NullInt64) {
 	p.ClonedAt = time.Unix(cloned, 0)
 	if pulled.Valid {
 		t := time.Unix(pulled.Int64, 0)
 		p.LastPullAt = &t
+	}
+	if pushed.Valid {
+		t := time.Unix(pushed.Int64, 0)
+		p.LastPushAt = &t
 	}
 }
 

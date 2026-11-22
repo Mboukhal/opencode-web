@@ -17,6 +17,11 @@
     <span class="brand-name">opencode</span>
   </a>
   {{if .User}}
+  <nav class="topnav" aria-label="Sections">
+    <a href="/projects">Projects</a>
+    <a href="/mobile">Mobile</a>
+    <a href="/settings">Settings</a>
+  </nav>
   <form method="post" action="/logout" class="topbar-right">
     <span class="who" title="{{.User.Email}}">{{shortEmail .User.Email}}</span>
     <button class="btn btn-ghost btn-sm" type="submit">Sign out</button>

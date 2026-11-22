@@ -13,11 +13,19 @@
       stream.appendChild(el);
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     }
-    function textEl(ev) {
-      var p = document.createElement('div');
-      p.className = 'ev-text';
-      p.textContent = ev.text || '';
-      return p;
+    // Streamed text arrives as deltas. A delta with status "start" opens a new
+    // block; later deltas append to it so a paragraph is not split per token.
+    var openText = null;
+    function addText(ev) {
+      if (ev.status === 'start' || !openText) {
+        var p = document.createElement('div');
+        p.className = 'ev-text';
+        p.textContent = ev.text || '';
+        openText = p;
+        add(p);
+        return;
+      }
+      openText.textContent += ev.text || '';
     }
     function toolEl(ev) {
       var p = document.createElement('div');
@@ -38,7 +46,7 @@
     }
     function onRunEvent(ev) {
       switch (ev.type) {
-        case 'text': add(textEl(ev)); break;
+        case 'text': addText(ev); break;
         case 'tool': add(toolEl(ev)); break;
         case 'error': add(noteEl('ev-error', ev)); break;
         case 'notice': {
@@ -50,10 +58,11 @@
         }
         case 'done':
           if (statusPill) {
-            statusPill.textContent = ev.error ? 'failed' : 'finished';
+            statusPill.textContent = ev.error ? 'failed' : (ev.text || 'finished');
             statusPill.className = 'pill ' + (ev.error ? 'pill-error' : 'pill-up_to_date');
           }
-          if (!ev.error) add(noteEl('ev-done', ev));
+          add(noteEl(ev.error ? 'ev-error' : 'ev-done', ev));
+          if (cancelBtn) { cancelBtn.disabled = true; cancelBtn.hidden = true; }
           break;
       }
     }
@@ -65,6 +74,17 @@
       source.close();
       if (statusPill && statusPill.textContent === 'running') statusPill.textContent = 'ended';
     };
+
+    var cancelBtn = document.getElementById('cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', function () {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = 'Stopping…';
+        fetch('/run/' + encodeURIComponent(cancelBtn.getAttribute('data-run')) + '/cancel', {
+          method: 'POST', headers: { 'Accept': 'application/json' }
+        }).catch(function () {});
+      });
+    }
   }
 
   /* ---------- job page (clone / pull) ---------- */

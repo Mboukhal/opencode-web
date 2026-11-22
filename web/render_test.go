@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"html/template"
 	"io"
 	"log/slog"
@@ -14,10 +13,11 @@ import (
 
 	"opencodeweb/auth"
 	"opencodeweb/config"
-	"opencodeweb/models"
-	"opencodeweb/ocjson"
+	"opencodeweb/oconfig"
+	"opencodeweb/opencode"
 	"opencodeweb/projects"
 	"opencodeweb/runner"
+	"opencodeweb/service"
 	"opencodeweb/store"
 )
 
@@ -42,13 +42,26 @@ func newTestServer(t *testing.T) *Server {
 		StateDir:           filepath.Join(dir, "state"),
 		DBPath:             filepath.Join(dir, "app.db"),
 		OpenCodeTimeout:    time.Minute,
+		OpenCodeModel:      "opencode/muse-spark-1.3",
+		SkillsSrc:          filepath.Join(dir, "skills"),
+		ProviderKeys:       map[string]string{"openrouter": "sk-test"},
 	}
 	os.MkdirAll(cfg.ProjectsDir, 0o755)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// No OpenCode server in unit tests: the client provider returns nil, which
+	// the handlers treat as "server still starting".
+	rm := runner.New(func() *opencode.Client { return nil }, time.Minute)
+	svc := service.New(service.Settings{
+		Bin: cfg.OpenCodeBin, ConfigDir: cfg.ConfigDir, StateDir: cfg.StateDir,
+		Home: dir, Log: log,
+	})
+	ocfg := &oconfig.Config{
+		ConfigDir: cfg.ConfigDir, StateDir: cfg.StateDir, Home: dir,
+		Model: cfg.OpenCodeModel, Log: log,
+	}
 	srv, err := New(cfg, log, st, auth.New(cfg, st),
-		projects.New(cfg.ProjectsDir, "", st),
-		runner.New("/bin/true", cfg.ConfigDir, cfg.StateDir, "m", "", dir, time.Minute, nil))
+		projects.New(cfg.ProjectsDir, "", st), rm, svc, ocfg)
 	if err != nil {
 		t.Fatalf("building server: %v", err)
 	}
@@ -70,8 +83,9 @@ func renderTemplate(t *testing.T, srv *Server, name string, data pageData) strin
 }
 
 func TestTemplatesParse(t *testing.T) {
-	if len(mustTemplates(t)) != 5 {
-		t.Fatalf("expected 5 page templates")
+	// login, projects, project, run, job, mobile, settings
+	if n := len(mustTemplates(t)); n != 7 {
+		t.Fatalf("expected 7 page templates, got %d", n)
 	}
 }
 
@@ -144,53 +158,165 @@ func TestProjectPageRenders(t *testing.T) {
 
 func TestRunPageRenders(t *testing.T) {
 	srv := newTestServer(t)
-	dir := t.TempDir()
-	job, err := srv.runner.Start(context.Background(), "o", "r", dir, "hello", "", "", "", models.Chain{Primary: "m"})
-	if err != nil && !strings.Contains(err.Error(), "starting") {
-		t.Fatalf("starting job: %v", err)
-	}
-	jd := runData{ID: "x"}
-	if job != nil {
-		jd = runData{ID: job.ID, Owner: "o", Repo: "r", Prompt: "hello", StartedAt: job.StartedAt()}
-	}
+	jd := runData{ID: "x", Owner: "o", Repo: "r", Prompt: "hello",
+		SessionID: "ses_123", StartedAt: time.Now()}
 	out := renderTemplate(t, srv, "run", pageData{Title: "Run", Data: jd})
 	// The container carries the run id; app.js builds the SSE URL from it.
-	for _, want := range []string{`id="stream"`, `data-run="` + jd.ID + `"`} {
+	for _, want := range []string{
+		`id="stream"`, `data-run="x"`, `id="cancel"`, "ses_123", "Continue on phone",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("run page missing %q", want)
 		}
 	}
 }
 
-func TestParseLine(t *testing.T) {
+func TestMobilePageRenders(t *testing.T) {
+	srv := newTestServer(t)
+	u := &store.User{Email: "lios80466@gmail.com"}
+	page := mobilePage{
+		PairURL:    "https://code.example.dev/auth/connect/abc123",
+		QR:         template.HTML(qrHTML("https://code.example.dev/auth/connect/abc123")),
+		ServerAddr: "127.0.0.1:4096",
+		AppURL:     "https://opencode.ai/mobile",
+		Ready:      true,
+	}
+	out := renderTemplate(t, srv, "mobile", pageData{Title: "Mobile", User: u, Data: page})
+	for _, want := range []string{
+		"OpenCode Mobile",
+		"/auth/connect/abc123",
+		"<svg",
+		`action="/mobile/pair"`,
+		"TestFlight",
+		"opencode pair --remote",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("mobile page missing %q", want)
+		}
+	}
+}
+
+func TestProjectPageShowsPushAndSkills(t *testing.T) {
+	srv := newTestServer(t)
+	u := &store.User{Email: "lios80466@gmail.com"}
+	page := projectPage{
+		Project:   store.Project{Owner: "Mboukhal", Repo: "demo", Path: "/data/projects/Mboukhal/demo"},
+		Status:    projects.StatusUpToDate,
+		Skills:    []string{"analytics", "backtest-expert"},
+		KeyExists: true,
+		KeyPath:   "/data/ssh/id_ed25519",
+	}
+	out := renderTemplate(t, srv, "project", pageData{Title: "demo", User: u, Data: page})
+	for _, want := range []string{
+		`action="/projects/push"`, "Commit &amp; push", "Pull",
+		"backtest-expert", "/mobile",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("project page missing %q", want)
+		}
+	}
+}
+
+func TestTranslate(t *testing.T) {
 	tests := []struct {
 		name    string
-		line    string
+		raw     string
+		session string
 		want    bool
 		typ     string
-		session string
+		text    string
 	}{
-		{"text", `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"OK"}}`, true, "text", "ses_1"},
-		{"tool", `{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","tool":"shell","state":{"status":"completed","input":{"command":"ls"}}}}`, true, "tool", "ses_1"},
-		{"error", `{"type":"error","sessionID":"ses_1","error":{"type":"provider.auth","message":"bad key"}}`, true, "error", "ses_1"},
-		{"log line", `timestamp=2026 level=INFO message=x`, false, "", ""},
-		{"empty text", `{"type":"text","sessionID":"ses_1","part":{"text":"  "}}`, false, "", "ses_1"},
+		{
+			name:    "text delta start",
+			raw:     `{"type":"session.text.delta","data":{"sessionID":"ses_1","ordinal":0,"delta":"Hel"}}`,
+			session: "ses_1", want: true, typ: "text", text: "Hel",
+		},
+		{
+			name:    "text delta continues",
+			raw:     `{"type":"session.text.delta","data":{"sessionID":"ses_1","ordinal":3,"delta":"lo"}}`,
+			session: "ses_1", want: true, typ: "text", text: "lo",
+		},
+		{
+			name:    "other session ignored",
+			raw:     `{"type":"session.text.delta","data":{"sessionID":"ses_2","ordinal":0,"delta":"x"}}`,
+			session: "ses_1", want: false,
+		},
+		{
+			name:    "full text is not duplicated after deltas",
+			raw:     `{"type":"session.text.ended","data":{"sessionID":"ses_1","ordinal":0,"text":"Hello"}}`,
+			session: "ses_1", want: false,
+		},
+		{
+			name:    "tool call",
+			raw:     `{"type":"session.tool.called","data":{"sessionID":"ses_1","id":"t1","input":{"command":"ls"},"native":{"name":"shell"}}}`,
+			session: "ses_1", want: true, typ: "tool",
+		},
+		{
+			name:    "a failed step is reported but does not end the turn",
+			raw:     `{"type":"session.step.failed","data":{"sessionID":"ses_1","error":{"type":"provider.auth","message":"User not found."}}}`,
+			session: "ses_1", want: true, typ: "error",
+		},
+		{
+			name:    "a failed turn ends the run",
+			raw:     `{"type":"session.execution.failed","data":{"sessionID":"ses_1","error":{"type":"provider.auth","message":"User not found."}}}`,
+			session: "ses_1", want: true, typ: "done",
+		},
+		{
+			name:    "finished run",
+			raw:     `{"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}`,
+			session: "ses_1", want: true, typ: "done",
+		},
+		{
+			name:    "unrelated event",
+			raw:     `{"type":"project.updated","data":{"id":"p1"}}`,
+			session: "ses_1", want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := ocjson.Parse(tt.line)
+			got, ok := opencode.Translate([]byte(tt.raw), tt.session)
 			if ok != tt.want {
 				t.Fatalf("ok = %v, want %v", ok, tt.want)
 			}
 			if !tt.want {
 				return
 			}
-			if got.Event.Type != tt.typ {
-				t.Errorf("type = %q, want %q", got.Event.Type, tt.typ)
+			if got.Type != tt.typ {
+				t.Errorf("type = %q, want %q", got.Type, tt.typ)
 			}
-			if got.SessionID != tt.session {
-				t.Errorf("session = %q, want %q", got.SessionID, tt.session)
+			if tt.text != "" && got.Text != tt.text {
+				t.Errorf("text = %q, want %q", got.Text, tt.text)
 			}
 		})
+	}
+}
+
+// TestPairOriginWarning guards the failure where the pairing link pointed at
+// the web app instead of the OpenCode server.
+func TestPairOriginWarning(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.PublicBaseURL = "https://code.mboukhal.dev"
+
+	if !srv.cfg.PairOriginIsApp() {
+		t.Fatal("expected the default origin to be flagged as the web app")
+	}
+
+	u := &store.User{Email: "lios80466@gmail.com"}
+	page := mobilePage{
+		PairWarning: "Phones cannot pair through https://code.mboukhal.dev",
+		Ready:       true,
+	}
+	out := renderTemplate(t, srv, "mobile", pageData{Title: "Mobile", User: u, Data: page})
+	if !strings.Contains(out, "alert-error") || !strings.Contains(out, "Phones cannot pair through") {
+		t.Error("mobile page did not surface the pairing origin warning")
+	}
+
+	// Once the pairing host is set separately, no warning and the origin is used.
+	srv.cfg.MobilePairURL = "https://opencode.mboukhal.dev"
+	if srv.cfg.PairOriginIsApp() {
+		t.Error("separate pairing origin still flagged as the app")
+	}
+	if got := srv.cfg.PairOrigin(); got != "https://opencode.mboukhal.dev" {
+		t.Errorf("PairOrigin = %q", got)
 	}
 }

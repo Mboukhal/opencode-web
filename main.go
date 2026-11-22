@@ -15,8 +15,10 @@ import (
 
 	"opencodeweb/auth"
 	"opencodeweb/config"
+	"opencodeweb/oconfig"
 	"opencodeweb/projects"
 	"opencodeweb/runner"
+	"opencodeweb/service"
 	"opencodeweb/store"
 	"opencodeweb/web"
 )
@@ -37,7 +39,7 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
-	for _, dir := range []string{cfg.ProjectsDir, cfg.ConfigDir, cfg.StateDir} {
+	for _, dir := range []string{cfg.ProjectsDir, cfg.ConfigDir, cfg.StateDir, cfg.SkillsSrc} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
@@ -54,12 +56,42 @@ func run(log *slog.Logger) error {
 	}
 
 	home, _ := os.UserHomeDir()
-	rm := runner.New(cfg.OpenCodeBin, cfg.ConfigDir, cfg.StateDir, cfg.OpenCodeModel,
-		cfg.OpenCodeAgent, home, cfg.OpenCodeTimeout, cfg.OpenCodeEnv)
+
+	// The OpenCode config directory is shared by the server and every session:
+	// write opencode.json and deploy local skills before the server starts so
+	// it discovers them on first load.
+	ocfg := &oconfig.Config{
+		Bin: cfg.OpenCodeBin, ConfigDir: cfg.ConfigDir, StateDir: cfg.StateDir, Home: home,
+		SkillsSrc: cfg.SkillsSrc, Model: cfg.OpenCodeModel, Agent: cfg.OpenCodeAgent,
+		Providers: cfg.ProviderKeys, Log: log,
+	}
+	if err := ocfg.Ensure(context.Background()); err != nil {
+		return fmt.Errorf("preparing opencode config: %w", err)
+	}
+
+	svc := service.New(service.Settings{
+		Bin: cfg.OpenCodeBin, ConfigDir: cfg.ConfigDir, StateDir: cfg.StateDir, Home: home,
+		Hostname: cfg.OpenCodeServiceHost, Port: cfg.OpenCodeServicePort,
+		Password: cfg.OpenCodeServicePassword, Env: cfg.OpenCodeEnv, Log: log,
+	})
+	client, err := svc.Start(context.Background())
+	if err != nil {
+		// A server that failed to start must not take down the UI: the pages
+		// report it and the user can still clone, push and pair later.
+		log.Error("opencode server unavailable", "err", err)
+	} else {
+		svc.SaveAddress()
+		if err := ocfg.PushKeys(context.Background(), client); err != nil {
+			log.Error("storing provider keys", "err", err)
+		}
+	}
+
+	rm := runner.New(svc.Client, cfg.OpenCodeTimeout)
 	pm := projects.New(cfg.ProjectsDir, cfg.SSHKeyPath, st)
+	pm.SetLogger(log)
 	am := auth.New(cfg, st)
 
-	srv, err := web.New(cfg, log, st, am, pm, rm)
+	srv, err := web.New(cfg, log, st, am, pm, rm, svc, ocfg)
 	if err != nil {
 		return err
 	}
@@ -105,6 +137,7 @@ func run(log *slog.Logger) error {
 		log.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		defer svc.Stop()
 		return httpSrv.Shutdown(shutdownCtx)
 	}
 	return nil

@@ -1,0 +1,65 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/projects">Projects</a><span>/</span><span>Settings</span></nav>
+
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">What the shared OpenCode server sees: model, skills, provider keys and GitHub access.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <h2 class="panel-title">OpenCode server</h2>
+  <ul class="kv">
+    <li><span>Status</span><span class="{{if .Data.ServerOK}}ok{{else}}bad{{end}}">{{if .Data.ServerOK}}ready{{else}}unavailable{{end}}</span></li>
+    <li><span>Address</span><span class="mono">{{if .Data.ServerAddr}}{{.Data.ServerAddr}}{{else}}–{{end}}</span></li>
+    <li><span>Default model</span><span class="mono">{{.Data.Model}}</span></li>
+  </ul>
+  {{if .Data.ServerErr}}<p class="alert alert-warn">{{.Data.ServerErr}}</p>{{end}}
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Local skills</h2>
+  <ul class="kv">
+    <li><span>Source</span><span class="mono">{{.Data.SkillsSrc}}</span></li>
+    <li><span>Deployed to</span><span class="mono">{{.Data.SkillsDir}}</span></li>
+    <li><span>Loaded</span><span>{{len .Data.Skills}}</span></li>
+  </ul>
+  {{if .Data.SkillErr}}<p class="alert alert-warn">{{.Data.SkillErr}}</p>{{end}}
+  {{if .Data.Skills}}
+  <p class="chips-readonly">
+    {{range .Data.Skills}}<span class="tag">{{.}}</span>{{end}}
+  </p>
+  {{else}}
+  <p class="dialog-hint">No skills loaded yet. Put skill folders under the source directory and restart.</p>
+  {{end}}
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Provider API keys</h2>
+  <ul class="kv">
+    <li><span>Configured providers</span><span class="mono">{{if .Data.Providers}}{{range .Data.Providers}}{{.}} {{end}}{{else}}none{{end}}</span></li>
+    <li><span>Stored credentials</span><span>{{.Data.KeyCount}}</span></li>
+  </ul>
+  {{if .Data.KeyErr}}<p class="alert alert-warn">{{.Data.KeyErr}}</p>{{end}}
+  <p class="dialog-hint">
+    Keys come from <code>PROVIDER_KEYS</code> in the deployment environment and are stored as
+    OpenCode credentials on boot. They are never shown in this UI.
+  </p>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">GitHub SSH key</h2>
+  <ul class="kv">
+    <li><span>Key path</span><span class="mono">{{.Data.SSHKey.Path}}</span></li>
+    <li><span>Exists</span><span class="{{if .Data.SSHKey.Exists}}ok{{else}}bad{{end}}">{{if .Data.SSHKey.Exists}}yes{{else}}no{{end}}</span></li>
+    <li><span>Fingerprint</span><span class="mono">{{if .Data.SSHKey.Fingerprint}}{{.Data.SSHKey.Fingerprint}}{{else}}–{{end}}</span></li>
+    <li><span>GitHub auth</span><span class="{{if .Data.GitHubAuthOK}}ok{{else}}bad{{end}}">{{if .Data.GitHubAuthOK}}authenticated{{else}}failed{{end}}</span></li>
+  </ul>
+  {{if .Data.SSHKey.PublicKey}}
+  <label for="pubkey">Public key (add as a deploy key on GitHub)</label>
+  <textarea id="pubkey" class="mono" rows="3" readonly onclick="this.select()">{{.Data.SSHKey.PublicKey}}</textarea>
+  {{end}}
+  {{if .Data.GitHubAuth}}<pre class="log">{{.Data.GitHubAuth}}</pre>{{end}}
+</section>
+{{end}}

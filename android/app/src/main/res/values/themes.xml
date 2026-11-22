@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.OcMobile" parent="Theme.AppCompat.DayNight.DarkActionBar">
+        <item name="colorPrimary">#FF1F6F5C</item>
+        <item name="colorPrimaryDark">#FF0C0C0E</item>
+        <item name="colorAccent">#FF7AD1A8</item>
+    </style>
+</resources>

@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1>Session</h1>
-    <p class="sub">Started {{since .Data.StartedAt}}</p>
+    <p class="sub">Started {{since .Data.StartedAt}}{{if .Data.SessionID}} · <span class="mono">{{.Data.SessionID}}</span>{{end}}</p>
   </div>
   <span class="pill pill-running" id="status">running</span>
 </div>
@@ -13,6 +13,11 @@
 
 <div class="stream" id="stream" data-run="{{.Data.ID}}">
   <div class="stream-empty" id="stream-empty">Waiting for the first token…</div>
+</div>
+
+<div class="btn-row">
+  <button class="btn btn-secondary" id="cancel" type="button" data-run="{{.Data.ID}}">Stop</button>
+  <a class="btn btn-secondary" href="/mobile">Continue on phone</a>
 </div>
 
 <a class="btn btn-secondary btn-block" href="/projects/{{.Data.Owner}}/{{.Data.Repo}}">Back to project</a>

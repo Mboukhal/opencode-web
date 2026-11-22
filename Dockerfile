@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # A real user: OpenCode and the projects should never run as root.
 RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 -m -d /data/home app \
-    && mkdir -p /data/projects /data/config /data/state /data/app /data/ssh /data/install /data/home
+    && mkdir -p /data/projects /data/config /data/state /data/app /data/ssh /data/install /data/home /data/skills
 
 COPY scripts/install-opencode.sh /usr/local/bin/install-opencode.sh
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
